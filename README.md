@@ -98,6 +98,19 @@ This makes any public repository instantly presentable.
 
 ---
 
+## Showcase Pages
+
+These are standalone markdown files you can drop directly into `clicker-page`:
+
+1. [Aurora Launch Story](./showcases/aurora-launch-story.md)  
+   Product narrative with blockquote, metrics table, and code snippet.
+2. [Oceanic Design Manifesto](./showcases/oceanic-design-manifesto.md)  
+   Clean typography-focused deck with principles and color system.
+3. [Alpine Travel Brief](./showcases/alpine-travel-brief.md)  
+   Visual travel story with itinerary, remote image, and concise structure.
+
+---
+
 ## Project Goals
 
 - One-page app
@@ -152,4 +165,3 @@ Drop a file or provide a URL.
 Navigate with arrow keys.
 
 Present directly from the same content you maintain in version control.
-

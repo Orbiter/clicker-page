@@ -14,12 +14,157 @@
   var touchStartY = 0;
   var dragDepth = 0;
   var currentBaseUrl = window.location.href;
+  var mermaidReady = false;
+  var mermaidRenderCount = 0;
 
   function renderMarkdown(markdown) {
-    if (window.ClickerMarkdownRenderer && typeof window.ClickerMarkdownRenderer.render === 'function') {
-      return window.ClickerMarkdownRenderer.render(markdown);
+    if (window.marked && typeof window.marked.parse === 'function') {
+      return window.marked.parse(markdown || '');
     }
     return '<pre><code>Markdown renderer missing.</code></pre>';
+  }
+
+  async function copyToClipboard(text) {
+    if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+      await navigator.clipboard.writeText(text);
+      return;
+    }
+
+    var helper = document.createElement('textarea');
+    helper.value = text;
+    helper.setAttribute('readonly', '');
+    helper.style.position = 'fixed';
+    helper.style.opacity = '0';
+    document.body.appendChild(helper);
+    helper.focus();
+    helper.select();
+    document.execCommand('copy');
+    document.body.removeChild(helper);
+  }
+
+  function createCopyButton(getText) {
+    var button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'copy-code-btn';
+    button.textContent = 'Copy';
+    button.setAttribute('aria-label', 'Copy code to clipboard');
+
+    button.addEventListener('click', async function () {
+      var originalLabel = button.textContent;
+      button.disabled = true;
+      try {
+        await copyToClipboard(getText());
+        button.textContent = 'Copied';
+      } catch (_error) {
+        button.textContent = 'Error';
+      }
+      window.setTimeout(function () {
+        button.textContent = originalLabel;
+        button.disabled = false;
+      }, 1200);
+    });
+
+    return button;
+  }
+
+  function looksLikeMermaid(text) {
+    var firstLine = String(text || '').trim().split('\n')[0] || '';
+    return /^(graph|flowchart|sequenceDiagram|classDiagram|stateDiagram|erDiagram|journey|gantt|pie|mindmap|timeline|gitGraph|quadrantChart|xychart-beta|C4Context|C4Container|C4Component|C4Dynamic|C4Deployment)\b/.test(firstLine);
+  }
+
+  function isMermaidBlock(codeEl) {
+    if (!codeEl) return false;
+    var className = codeEl.className || '';
+    if (/\blanguage-mermaid\b/.test(className)) return true;
+    return looksLikeMermaid(codeEl.textContent || '');
+  }
+
+  function ensureMermaid() {
+    if (!(window.mermaid && typeof window.mermaid.render === 'function')) return false;
+    if (!mermaidReady) {
+      window.mermaid.initialize({ startOnLoad: false });
+      mermaidReady = true;
+    }
+    return true;
+  }
+
+  function escapeHtml(value) {
+    return String(value)
+      .replaceAll('&', '&amp;')
+      .replaceAll('<', '&lt;')
+      .replaceAll('>', '&gt;')
+      .replaceAll('"', '&quot;')
+      .replaceAll("'", '&#39;');
+  }
+
+  function renderMermaidBlocks(rootEl) {
+    if (!ensureMermaid()) return;
+
+    rootEl.querySelectorAll('pre > code').forEach(function (codeEl) {
+      if (!isMermaidBlock(codeEl)) return;
+
+      var pre = codeEl.parentElement;
+      if (!pre || pre.dataset.mermaidEnhanced === '1') return;
+      pre.dataset.mermaidEnhanced = '1';
+
+      var source = codeEl.textContent || '';
+      var wrapper = document.createElement('div');
+      wrapper.className = 'mermaid-block';
+
+      var graph = document.createElement('div');
+      graph.className = 'mermaid-graph';
+      wrapper.appendChild(graph);
+
+      wrapper.appendChild(createCopyButton(function () { return source; }));
+      pre.replaceWith(wrapper);
+
+      var renderId = 'mermaid-diagram-' + String(mermaidRenderCount);
+      mermaidRenderCount += 1;
+      var settled = false;
+      function setRendered(result) {
+        if (settled) return;
+        settled = true;
+        if (result && typeof result.svg === 'string') {
+          graph.innerHTML = result.svg;
+          return;
+        }
+        if (typeof result === 'string') {
+          graph.innerHTML = result;
+          return;
+        }
+        graph.innerHTML = '<pre><code>' + escapeHtml(source) + '</code></pre>';
+      }
+
+      try {
+        var maybeResult = window.mermaid.render(renderId, source, function (svg) {
+          setRendered(svg);
+        });
+
+        if (maybeResult && typeof maybeResult.then === 'function') {
+          maybeResult.then(function (result) {
+            setRendered(result);
+          }).catch(function () {
+            setRendered(null);
+          });
+        } else if (typeof maybeResult !== 'undefined') {
+          setRendered(maybeResult);
+        } else {
+          window.setTimeout(function () {
+            if (!settled) setRendered(null);
+          }, 300);
+        }
+      } catch (_error) {
+        setRendered(null);
+      }
+    });
+  }
+
+  function enhanceCodeBlocks(rootEl) {
+    rootEl.querySelectorAll('pre > code').forEach(function (codeEl) {
+      var pre = codeEl.parentElement;
+      if (!pre || pre.querySelector('.copy-code-btn')) return;
+      pre.appendChild(createCopyButton(function () { return codeEl.textContent || ''; }));
+    });
   }
 
   function splitSlides(markdown) {
@@ -59,6 +204,44 @@
     return chunks;
   }
 
+  function getSourceFromQuery() {
+    try {
+      var parsed = new URL(window.location.href);
+      return (parsed.searchParams.get('source') || '').trim();
+    } catch (_error) {
+      return '';
+    }
+  }
+
+  function updateSourceQuery(source) {
+    if (!source) return;
+    var nextHref = '';
+    try {
+      var parsed = new URL(window.location.href);
+      parsed.searchParams.set('source', source);
+      nextHref = parsed.toString();
+    } catch (_prepError) {
+      return;
+    }
+
+    try {
+      window.history.replaceState({ source: source }, '', nextHref);
+    } catch (_error) {
+      // Ignore and fall through to hard navigation fallback.
+    }
+
+    var applied = false;
+    try {
+      applied = new URL(window.location.href).searchParams.get('source') === source;
+    } catch (_verifyError) {}
+
+    if (!applied) {
+      try {
+        window.location.replace(nextHref);
+      } catch (_replaceError) {}
+    }
+  }
+
   function updateView() {
     var total = slides.length;
 
@@ -72,6 +255,8 @@
     currentIndex = Math.max(0, Math.min(currentIndex, total - 1));
     slideEl.innerHTML = renderMarkdown(slides[currentIndex]);
     resolveRelativeAssets(slideEl, currentBaseUrl);
+    renderMermaidBlocks(slideEl);
+    enhanceCodeBlocks(slideEl);
     slideEl.scrollTop = 0;
 
     dropzone.style.display = 'none';
@@ -114,13 +299,89 @@
     }
   }
 
-  async function loadFromUrl(url) {
-    var response = await fetch(url, { mode: 'cors' });
-    if (!response.ok) {
-      throw new Error('HTTP ' + String(response.status) + ' while loading URL');
+  function looksLikeLoadableSource(value) {
+    try {
+      var parsed = new URL(value);
+      return parsed.protocol === 'http:' || parsed.protocol === 'https:' || parsed.protocol === 'file:';
+    } catch (_error) {
+      return false;
+    }
+  }
+
+  function toFileUrl(path) {
+    var cleaned = String(path || '').trim();
+    if (!cleaned) return '';
+    if (/^file:\/\//i.test(cleaned)) return cleaned;
+    var normalized = cleaned.replace(/\\/g, '/');
+    if (!normalized.startsWith('/')) normalized = '/' + normalized;
+    return 'file://' + encodeURI(normalized);
+  }
+
+  function looksLikeAbsolutePath(value) {
+    var cleaned = String(value || '').trim();
+    if (!cleaned) return false;
+    if (cleaned.startsWith('/')) return true;
+    return /^[A-Za-z]:[\\/]/.test(cleaned);
+  }
+
+  function getDroppedFileSource(file, dt) {
+    var uriList = normalizeDroppedUri(dt.getData('text/uri-list'));
+    if (uriList && looksLikeLoadableSource(uriList)) return uriList;
+
+    var mozUrl = dt.getData('text/x-moz-url');
+    if (mozUrl) {
+      var mozLine = mozUrl.split('\n').map(function (line) { return line.trim(); }).filter(Boolean)[0] || '';
+      if (mozLine && looksLikeLoadableSource(mozLine)) return mozLine;
+    }
+
+    var downloadUrl = dt.getData('DownloadURL');
+    if (downloadUrl) {
+      var parts = downloadUrl.split(':');
+      if (parts.length >= 3) {
+        var candidate = parts.slice(2).join(':').trim();
+        if (candidate && looksLikeLoadableSource(candidate)) return candidate;
+      }
+    }
+
+    var plainText = dt.getData('text/plain').trim();
+    if (plainText) {
+      var firstLine = plainText.split('\n').map(function (line) { return line.trim(); }).filter(Boolean)[0] || '';
+      if (firstLine && looksLikeLoadableSource(firstLine)) return firstLine;
+      if (looksLikeAbsolutePath(firstLine)) {
+        var fromPlainPath = toFileUrl(firstLine);
+        if (looksLikeLoadableSource(fromPlainPath)) return fromPlainPath;
+      }
+    }
+
+    if (file && typeof file.path === 'string' && file.path.trim()) {
+      var derived = toFileUrl(file.path);
+      if (looksLikeLoadableSource(derived)) return derived;
+    }
+    return '';
+  }
+
+  async function loadFromSource(source) {
+    var protocol = '';
+    try {
+      protocol = new URL(source).protocol;
+    } catch (_error) {}
+
+    var fetchOptions = protocol === 'http:' || protocol === 'https:' ? { mode: 'cors' } : {};
+    var response;
+    try {
+      response = await fetch(source, fetchOptions);
+    } catch (error) {
+      if (protocol === 'file:') {
+        throw new Error('This browser blocks loading local files via file:// on reload. Use an http(s) source to enable persistent reload.');
+      }
+      throw error;
+    }
+    if ((protocol === 'http:' || protocol === 'https:') && !response.ok) {
+      throw new Error('HTTP ' + String(response.status) + ' while loading source');
     }
     var text = await response.text();
-    loadMarkdown(text, url, url);
+    loadMarkdown(text, source, source);
+    updateSourceQuery(source);
   }
 
   function normalizeDroppedUri(uriText) {
@@ -225,14 +486,17 @@
       if (dt.files && dt.files.length > 0) {
         var file = dt.files[0];
         var fileText = await file.text();
-        var fileUri = normalizeDroppedUri(dt.getData('text/uri-list'));
+        var fileSource = getDroppedFileSource(file, dt);
         var baseForFile = '';
-        if (fileUri && canBeBaseUrl(fileUri)) {
+        if (fileSource && canBeBaseUrl(fileSource)) {
           try {
-            baseForFile = new URL('.', fileUri).href;
+            baseForFile = new URL('.', fileSource).href;
           } catch (_error) {}
         }
         loadMarkdown(fileText, file.name || 'local file', baseForFile || window.location.href);
+        if (fileSource) {
+          updateSourceQuery(fileSource);
+        }
         return;
       }
 
@@ -242,8 +506,8 @@
 
       if (!droppedText) return;
 
-      if (droppedUrl || looksLikeUrl(droppedText)) {
-        await loadFromUrl(droppedText);
+      if (droppedUrl || looksLikeLoadableSource(droppedText)) {
+        await loadFromSource(droppedText);
       } else {
         loadMarkdown(droppedText, 'dropped text', window.location.href);
       }
@@ -294,8 +558,16 @@
     }
   }, { passive: true });
 
-  loadMarkdown(
-    '# clicker.page\n\nDrop a markdown file or URL onto this page.\n\n---\n\n## Navigation\n\n- Arrow right/down: next slide\n- Arrow left/up: previous slide\n- Swipe: next/previous on mobile',
-    'welcome'
-  );
+  var sourceFromQuery = getSourceFromQuery();
+  if (sourceFromQuery && looksLikeLoadableSource(sourceFromQuery)) {
+    loadFromSource(sourceFromQuery).catch(function (error) {
+      var message = error instanceof Error ? error.message : String(error);
+      loadMarkdown('# Load error\n\nCould not load source from URL query.\n\n`' + message + '`', 'error', window.location.href);
+    });
+  } else {
+    loadMarkdown(
+      '# clicker.page\n\nDrop a markdown file or URL onto this page.\n\n---\n\n## Navigation\n\n- Arrow right/down: next slide\n- Arrow left/up: previous slide\n- Swipe: next/previous on mobile',
+      'welcome'
+    );
+  }
 })();
