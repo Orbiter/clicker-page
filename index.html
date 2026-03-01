@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>clicker.page</title>
+  <link rel="stylesheet" href="./css/style.css">
+</head>
+<body>
+  <header class="header">
+    <div class="brand">clicker.page</div>
+    <div class="header-right" id="sourceLabel"></div>
+  </header>
+
+  <main class="app" id="app">
+    <section class="dropzone" id="dropzone" aria-label="Drop markdown file or URL">
+      <div>
+        <h1>Drop markdown file or URL</h1>
+        <p>
+          Drop a <code>.md</code> file, a markdown URL, or plain markdown text.<br>
+          Use arrow keys or swipe to navigate slides.
+        </p>
+      </div>
+    </section>
+
+    <section class="slide-wrap" id="slideWrap">
+      <article class="slide" id="slide"></article>
+    </section>
+
+    <div class="pager" id="pager"></div>
+  </main>
+
+  <script src="./js/lib/clicker-markdown-renderer.js"></script>
+  <script src="./js/app.js"></script>
+</body>
+</html>

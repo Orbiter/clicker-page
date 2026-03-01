@@ -1,0 +1,218 @@
+:root {
+  --header-height: 56px;
+  --bg: #ffffff;
+  --fg: #111111;
+  --muted: #666666;
+  --header-bg: #000000;
+  --header-fg: #ffffff;
+  --border: #d9d9d9;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+}
+
+body {
+  display: flex;
+  flex-direction: column;
+}
+
+.header {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: var(--header-height);
+  background: var(--header-bg);
+  color: var(--header-fg);
+  display: flex;
+  align-items: center;
+  padding: 0 16px;
+  z-index: 10;
+  user-select: none;
+}
+
+.brand {
+  font-weight: 700;
+  letter-spacing: 0.2px;
+  font-size: 17px;
+  white-space: nowrap;
+}
+
+.header-right {
+  margin-left: auto;
+  font-size: 13px;
+  opacity: 0.8;
+  max-width: 55vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app {
+  position: fixed;
+  top: var(--header-height);
+  left: 0;
+  right: 0;
+  bottom: 0;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+.dropzone {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 24px;
+  color: var(--muted);
+  transition: background 120ms ease, color 120ms ease;
+  border: 3px dashed transparent;
+}
+
+.dropzone.dragging {
+  border-color: #1e90ff;
+  color: #1e90ff;
+  background: #f1f8ff;
+}
+
+.dropzone h1 {
+  margin: 0 0 10px;
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--fg);
+}
+
+.dropzone p {
+  margin: 0;
+  line-height: 1.45;
+}
+
+.slide-wrap {
+  position: absolute;
+  inset: 0;
+  padding: 24px;
+  overflow: hidden;
+  display: none;
+}
+
+.slide {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 24px;
+  overflow: auto;
+  background: #ffffff;
+  font-size: clamp(1.35rem, 2.2vw, 2.1rem);
+  line-height: 1.45;
+  -webkit-overflow-scrolling: touch;
+}
+
+.slide h1,
+.slide h2,
+.slide h3,
+.slide h4,
+.slide h5,
+.slide h6 {
+  margin-top: 0.25em;
+  margin-bottom: 0.45em;
+  line-height: 1.15;
+}
+
+.slide h1 {
+  font-size: 1.9em;
+}
+
+.slide h2 {
+  font-size: 1.55em;
+}
+
+.slide h3 {
+  font-size: 1.3em;
+}
+
+.slide p,
+.slide ul,
+.slide ol,
+.slide blockquote,
+.slide pre,
+.slide table {
+  margin-top: 0.55em;
+  margin-bottom: 0.55em;
+}
+
+.slide pre {
+  padding: 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  overflow: auto;
+  background: #f8f8f8;
+}
+
+.slide code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 0.9em;
+}
+
+.slide blockquote {
+  border-left: 3px solid #999;
+  margin-left: 0;
+  padding-left: 12px;
+  color: #333;
+}
+
+.slide table {
+  border-collapse: collapse;
+}
+
+.slide th,
+.slide td {
+  border: 1px solid var(--border);
+  padding: 8px 10px;
+}
+
+.slide img {
+  max-width: 100%;
+  height: auto;
+}
+
+.pager {
+  position: absolute;
+  right: 30px;
+  bottom: 18px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.78);
+  color: #fff;
+  font-size: 12px;
+  letter-spacing: 0.2px;
+  display: none;
+  user-select: none;
+}
+
+@media (orientation: portrait) {
+  .dropzone::after {
+    content: "Tip: rotate to landscape for slide-like view.";
+    position: absolute;
+    bottom: 22px;
+    left: 16px;
+    right: 16px;
+    font-size: 12px;
+    color: var(--muted);
+  }
+}
