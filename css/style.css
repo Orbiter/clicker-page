@@ -1,3 +1,7 @@
+[hidden] {
+  display: none !important;
+}
+
 :root {
   --header-height: 56px;
   --bg: #ffffff;
@@ -1103,6 +1107,11 @@ body.theme-dark .slide .code-row:nth-child(even) {
   isolation: isolate;
   overflow: visible;
   color: #09111d;
+}
+
+.slide .chain-warp--line {
+  display: inline-block;
+  max-width: 100%;
 }
 
 .slide .chain-warp::before {

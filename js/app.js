@@ -27,6 +27,7 @@
   var dragDepth = 0;
   var currentBaseUrl = window.location.href;
   var currentSourceQuery = '';
+  var currentSourceDisplay = '';
   var currentSourceIsExplicit = false;
   var mermaidReady = false;
   var markedReady = false;
@@ -218,6 +219,53 @@
   loadUiPreferences();
   applyUiPreferences();
 
+  function escapeHtml(value) {
+    return String(value || '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
+  function parseMarkdownImageSource(rawHref) {
+    var normalized = String(rawHref || '').trim();
+    var match = /^(.*?)(?:\s+=\s*(\d*)x(\d*))$/.exec(normalized);
+    if (!match) {
+      return { href: normalized, style: '' };
+    }
+
+    var href = String(match[1] || '').trim();
+    var width = String(match[2] || '').trim();
+    var height = String(match[3] || '').trim();
+    var styleParts = [];
+
+    if (width) styleParts.push('width:' + width + 'px');
+    if (height) styleParts.push('height:' + height + 'px');
+
+    return {
+      href: href,
+      style: styleParts.join(';')
+    };
+  }
+
+  function preprocessMarkdownImageSizing(markdown) {
+    return String(markdown || '').replace(/!\[([^\]]*)\]\(([^)\n]+?)\s+=\s*(\d*)x(\d*)\)/g, function (_match, alt, rawHref, width, height) {
+      var parsed = parseMarkdownImageSource(String(rawHref || '').trim() + ' =' + String(width || '') + 'x' + String(height || ''));
+      var attributes = ' data-clicker-src="' + escapeHtml(parsed.href) + '" alt="' + escapeHtml(alt || '') + '"';
+      if (parsed.style) {
+        attributes += ' style="' + escapeHtml(parsed.style) + '"';
+      }
+      return '<img' + attributes + '>';
+    });
+  }
+
+  function applyImageSizingAttributes(img, parsedImageSource) {
+    if (!img || !parsedImageSource || !parsedImageSource.style) return;
+    var existingStyle = img.getAttribute('style') || '';
+    var nextStyle = existingStyle ? existingStyle.replace(/;?\s*$/, ';') + parsedImageSource.style : parsedImageSource.style;
+    img.setAttribute('style', nextStyle);
+  }
+
   function ensureMarked() {
     if (!(window.marked && typeof window.marked.parse === 'function')) return false;
     if (markedReady) return true;
@@ -227,6 +275,17 @@
       renderer: {
         strong: function (text) {
           return '<strong class="md-strong-marker">' + text + '</strong>';
+        },
+        image: function (href, title, text) {
+          var parsed = parseMarkdownImageSource(href);
+          var attributes = ' data-clicker-src="' + escapeHtml(parsed.href) + '" alt="' + escapeHtml(text) + '"';
+          if (title) {
+            attributes += ' title="' + escapeHtml(title) + '"';
+          }
+          if (parsed.style) {
+            attributes += ' style="' + escapeHtml(parsed.style) + '"';
+          }
+          return '<img' + attributes + '>';
         }
       }
     });
@@ -237,7 +296,7 @@
 
   function renderMarkdown(markdown) {
     if (ensureMarked()) {
-      return window.marked.parse(markdown || '');
+      return window.marked.parse(preprocessMarkdownImageSizing(markdown || '')).replace(/<img\b([^>]*?)\ssrc=(["'])(.*?)\2([^>]*)>/gi, '<img$1 data-clicker-src=$2$3$2$4>');
     }
     return '<pre><code>Markdown renderer missing.</code></pre>';
   }
@@ -442,10 +501,12 @@
     rebuildPrintDeck();
   }
 
-  async function createLocalAssetContext(entries) {
+  async function createLocalAssetContext(entries, options) {
     var mapping = {};
     var urls = [];
     var normalizedEntries = Array.from(entries || []);
+    var settings = options || {};
+    var stripTopDirectory = Boolean(settings.stripTopDirectory);
 
     for (var entryIndex = 0; entryIndex < normalizedEntries.length; entryIndex += 1) {
       var entry = normalizedEntries[entryIndex];
@@ -456,7 +517,7 @@
 
       var normalizedPath = relativePath.replace(/\\/g, '/');
       var slashIndex = normalizedPath.indexOf('/');
-      if (slashIndex !== -1) {
+      if (stripTopDirectory && slashIndex !== -1) {
         normalizedPath = normalizedPath.slice(slashIndex + 1);
       }
 
@@ -535,7 +596,7 @@
     }
 
     await walkDirectory(directoryHandle, '');
-    return createLocalAssetContext(collectedFiles);
+    return createLocalAssetContext(collectedFiles, { stripTopDirectory: false });
   }
 
   function invalidatePersistedLocalAssetContext(deckKey, hash) {
@@ -646,7 +707,7 @@
       if (files && files.length) {
         createLocalAssetContext(Array.from(files).map(function (file) {
           return { file: file, relativePath: file.webkitRelativePath || file.name };
-        })).then(function (context) {
+        }), { stripTopDirectory: true }).then(function (context) {
           setLocalAssetContext(deckKey, context);
           updateView();
         });
@@ -687,6 +748,36 @@
     var rawUrl = new URL('https://raw.githubusercontent.com' + rawPath);
     debugLog('rewriteGitHubBlobToRaw', { from: normalized, to: rawUrl.href });
     return rawUrl.href;
+  }
+
+  function isExternalLinkHref(href) {
+    var normalized = String(href || '').trim();
+    if (!normalized) return false;
+
+    var parsed;
+    try {
+      parsed = new URL(normalized, window.location.href);
+    } catch (_error) {
+      return false;
+    }
+
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
+    if (window.location.protocol !== 'http:' && window.location.protocol !== 'https:') return true;
+    return parsed.origin !== window.location.origin;
+  }
+
+  function applyExternalLinkBehavior(rootEl) {
+    if (!rootEl) return;
+    rootEl.querySelectorAll('a[href]').forEach(function (anchor) {
+      var href = anchor.getAttribute('href') || '';
+      if (isExternalLinkHref(href)) {
+        anchor.setAttribute('target', '_blank');
+        anchor.setAttribute('rel', 'noopener noreferrer');
+      } else {
+        anchor.removeAttribute('target');
+        anchor.removeAttribute('rel');
+      }
+    });
   }
 
   function cacheFileSourceContent(source, markdown) {
@@ -746,6 +837,7 @@
     slideRevealProgress = {};
     currentIndex = 0;
     currentSourceQuery = '';
+    currentSourceDisplay = '';
     currentSourceIsExplicit = false;
     currentBaseUrl = '';
     currentDeckContentHash = '';
@@ -783,9 +875,10 @@
 
       var file = await handle.getFile();
       var text = await file.text();
-      cacheFileSourceContent(readmeSource, text);
-      markVerifiedFileSource(readmeSource);
-      loadMarkdown(text, readmeSource, readmeSource, readmeSource, true);
+      var localDropSource = createLocalDropSource(file.name || 'README.md');
+      cacheLocalDropContent(localDropSource, text);
+      updateSourceQuery(localDropSource);
+      loadMarkdown(text, file.name || 'README.md', '', localDropSource, true);
     } catch (error) {
       if (error && error.name === 'AbortError') return;
       debugLog('defaultReadme:pick-failed', String(error));
@@ -832,13 +925,20 @@
 
       watchedFileText = nextText;
       if (watchedSourceQuery) {
+        var preservedSourceQuery = stripSourceAnchor(watchedSourceQuery) + '#' + encodeURIComponent(getCurrentSlideAnchor());
         if (getSourceProtocol(watchedSourceQuery) === 'file:') {
           cacheFileSourceContent(watchedSourceQuery, nextText);
           markVerifiedFileSource(watchedSourceQuery);
         } else if (getSourceProtocol(watchedSourceQuery) === LOCAL_DROP_SOURCE_PREFIX) {
           cacheLocalDropContent(watchedSourceQuery, nextText);
         }
-        loadMarkdown(nextText, watchedSourceQuery + ' (watch)', getSourceProtocol(watchedSourceQuery) === 'file:' ? watchedSourceQuery : '', watchedSourceQuery, true);
+        loadMarkdown(
+          nextText,
+          preservedSourceQuery + ' (watch)',
+          getSourceProtocol(watchedSourceQuery) === 'file:' ? stripSourceAnchor(watchedSourceQuery) : '',
+          preservedSourceQuery,
+          true
+        );
       } else {
         loadMarkdown(nextText, file.name || 'watched file', '', '', false);
       }
@@ -871,17 +971,11 @@
       watchedFileHandle = handle;
       watchedFileText = await file.text();
 
-      var selectedSource = '';
-      if (getSourceProtocol(currentSourceQuery) === 'file:' && getSourceBasename(currentSourceQuery) === handle.name) {
-        selectedSource = currentSourceQuery;
-        cacheFileSourceContent(selectedSource, watchedFileText);
-        markVerifiedFileSource(selectedSource);
-      } else {
-        selectedSource = createLocalDropSource(handle.name || 'local file');
-        cacheLocalDropContent(selectedSource, watchedFileText);
-      }
+      var selectedSource = createLocalDropSource(handle.name || 'local file');
+      cacheLocalDropContent(selectedSource, watchedFileText);
       watchedSourceQuery = selectedSource;
-      loadMarkdown(watchedFileText, handle.name || selectedSource, getSourceProtocol(selectedSource) === 'file:' ? selectedSource : '', selectedSource, true);
+      updateSourceQuery(selectedSource);
+      loadMarkdown(watchedFileText, handle.name || selectedSource, '', selectedSource, true);
 
       if (watchPollTimer) window.clearInterval(watchPollTimer);
       watchPollTimer = window.setInterval(pollWatchedSourceFile, 1500);
@@ -1102,72 +1196,33 @@
   }
 
   function applyChainEffects(rootEl) {
-    var chainPattern = /([A-Za-z0-9_./()[\]-]+(?:\s*(?:->|→|⇒|⟶)\s*[A-Za-z0-9_./()[\]-]+)+)/g;
+    var chainPattern = /([A-Za-z0-9_./()[\]-]+(?:\s*(?:->|→|⇒|⟶)\s*[A-Za-z0-9_./()[\]-]+)+|^\s*(?:->|→|⇒|⟶)[^\n]+)/g;
     var candidates = rootEl.querySelectorAll('p, li, blockquote, h1, h2, h3, h4, h5, h6, td, th');
 
     candidates.forEach(function (element) {
       if (element.closest('pre, code, .mermaid-block')) return;
       if (element.querySelector('pre, code, .mermaid-block, img, svg')) return;
+      if (element.querySelector('.chain-warp')) return;
 
-      var walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT, {
-        acceptNode: function (node) {
-          if (!node.nodeValue || !chainPattern.test(node.nodeValue)) {
-            chainPattern.lastIndex = 0;
-            return NodeFilter.FILTER_REJECT;
-          }
-          chainPattern.lastIndex = 0;
+      chainPattern.lastIndex = 0;
+      if (!chainPattern.test(element.textContent || '')) {
+        chainPattern.lastIndex = 0;
+        return;
+      }
+      chainPattern.lastIndex = 0;
 
-          var parent = node.parentElement;
-          if (!parent) return NodeFilter.FILTER_REJECT;
-          if (parent.closest('pre, code, .mermaid-block, .chain-warp')) return NodeFilter.FILTER_REJECT;
-          return NodeFilter.FILTER_ACCEPT;
-        }
-      });
+      var warp = document.createElement('span');
+      warp.className = 'chain-warp chain-warp--line';
 
-      var matchingNodes = [];
-      while (walker.nextNode()) {
-        matchingNodes.push(walker.currentNode);
+      var label = document.createElement('span');
+      label.className = 'chain-warp__label';
+
+      while (element.firstChild) {
+        label.appendChild(element.firstChild);
       }
 
-      matchingNodes.forEach(function (textNode) {
-        var text = textNode.nodeValue || '';
-        chainPattern.lastIndex = 0;
-        if (!chainPattern.test(text)) {
-          chainPattern.lastIndex = 0;
-          return;
-        }
-        chainPattern.lastIndex = 0;
-
-        var fragment = document.createDocumentFragment();
-        var lastIndex = 0;
-        var match;
-
-        while ((match = chainPattern.exec(text))) {
-          var start = match.index;
-          var end = chainPattern.lastIndex;
-
-          if (start > lastIndex) {
-            fragment.appendChild(document.createTextNode(text.slice(lastIndex, start)));
-          }
-
-          var warp = document.createElement('span');
-          warp.className = 'chain-warp';
-
-          var label = document.createElement('span');
-          label.className = 'chain-warp__label';
-          label.textContent = match[0];
-
-          warp.appendChild(label);
-          fragment.appendChild(warp);
-          lastIndex = end;
-        }
-
-        if (lastIndex < text.length) {
-          fragment.appendChild(document.createTextNode(text.slice(lastIndex)));
-        }
-
-        textNode.parentNode.replaceChild(fragment, textNode);
-      });
+      warp.appendChild(label);
+      element.appendChild(warp);
     });
   }
 
@@ -1291,6 +1346,7 @@
       }
 
       if (tagName === 'SCRIPT' || tagName === 'STYLE') continue;
+      if (tagName === 'IMG' || tagName === 'SVG') return child;
       if (!child.textContent && !child.querySelector('img, svg, pre, table, ul, ol, blockquote')) continue;
       return child;
     }
@@ -1306,6 +1362,7 @@
       var tagName = child.tagName ? child.tagName.toUpperCase() : '';
 
       if (tagName === 'SCRIPT' || tagName === 'STYLE') continue;
+      if (tagName === 'IMG' || tagName === 'SVG') return child;
       if (!child.textContent && !child.querySelector('img, svg, pre, table, ul, ol, blockquote')) continue;
       return child;
     }
@@ -1750,9 +1807,8 @@
 
     var loaded = await waitForImageLoad(splitImage);
     if (!loaded || renderToken !== viewRenderToken) return;
-    if (splitImage.naturalHeight <= splitImage.naturalWidth) return;
 
-    var mediaHost = splitImage.parentElement;
+    var mediaHost = splitImage.parentElement === rootEl ? splitImage : splitImage.parentElement;
     var splitLayout = document.createElement('div');
     splitLayout.className = 'slide-split-layout';
 
@@ -1770,6 +1826,9 @@
       splitLayout.appendChild(mediaPane);
     }
 
+    if (mediaHost && mediaHost.parentElement === rootEl) {
+      rootEl.removeChild(mediaHost);
+    }
     mediaPane.appendChild(mediaHost);
 
     while (rootEl.firstChild) {
@@ -1792,6 +1851,7 @@
     var renderedTemplate = document.createElement('template');
     renderedTemplate.innerHTML = renderMarkdown(slideMarkdown);
     resolveRelativeAssets(renderedTemplate.content, settings.baseUrl);
+    applyExternalLinkBehavior(renderedTemplate.content);
     mountRenderedContent(targetEl, renderedTemplate.content);
     var mermaidRender = renderMermaidBlocks(targetEl);
     enhanceCodeBlocks(targetEl);
@@ -2038,6 +2098,46 @@
     }
   }
 
+  function getVisibleSourceText(source) {
+    var normalized = String(source || '').trim();
+    if (!normalized) return '';
+    if (getSourceProtocol(normalized) === LOCAL_DROP_SOURCE_PREFIX) {
+      var withoutAnchor = stripLocalDropAnchor(normalized);
+      var slashIndex = withoutAnchor.lastIndexOf('/');
+      var encodedName = slashIndex === -1 ? withoutAnchor : withoutAnchor.slice(slashIndex + 1);
+      return 'local:' + decodeURIComponent(encodedName || 'file.md');
+    }
+    return stripSourceAnchor(normalized);
+  }
+
+  function getVisibleSourceHref(source) {
+    var normalized = String(source || '').trim();
+    if (!normalized) return '';
+    if (getSourceProtocol(normalized) === LOCAL_DROP_SOURCE_PREFIX) return '';
+    return stripSourceAnchor(normalized);
+  }
+
+  function sanitizeSourceLabel(label) {
+    return String(label || '')
+      .replace(/\s+\(cached(?:, unresolved path)?\)$/i, '')
+      .replace(/\s+\(watch\)$/i, '')
+      .trim();
+  }
+
+  function deriveVisibleSourceDisplay(sourceLabel, sourceQueryValue) {
+    var queryValue = String(sourceQueryValue || '').trim();
+    if (!queryValue) return '';
+
+    if (getSourceProtocol(queryValue) === LOCAL_DROP_SOURCE_PREFIX) {
+      var cleanedLabel = sanitizeSourceLabel(sourceLabel);
+      if (cleanedLabel && getSourceProtocol(cleanedLabel) !== LOCAL_DROP_SOURCE_PREFIX) {
+        return 'local:' + cleanedLabel;
+      }
+    }
+
+    return getVisibleSourceText(queryValue);
+  }
+
   function getCurrentSlideAnchor() {
     var headingAnchor = getSlideHeadingAnchor(slides[currentIndex] || '');
     if (headingAnchor) return headingAnchor;
@@ -2061,14 +2161,17 @@
   }
 
   function updateHeaderSourceLabel() {
-    var visibleSource = stripSourceAnchor(currentSourceQuery || getSourceFromQuery() || '');
+    var effectiveSource = currentSourceQuery || getSourceFromQuery() || '';
+    var visibleSource = currentSourceDisplay || getVisibleSourceText(effectiveSource);
+    var visibleHref = getVisibleSourceHref(effectiveSource);
     sourceLabelEl.textContent = visibleSource ? '?source=' + visibleSource : '';
-    sourceLabelEl.setAttribute('href', visibleSource || '');
+    sourceLabelEl.setAttribute('href', visibleHref || '');
     if (visibleSource) {
       sourceLabelEl.removeAttribute('aria-hidden');
     } else {
       sourceLabelEl.setAttribute('aria-hidden', 'true');
     }
+    applyExternalLinkBehavior(document.querySelector('.brand'));
     updateDevWatchAvailability();
   }
 
@@ -2201,6 +2304,7 @@
     slides = splitSlides(trimmed);
     slideRevealProgress = {};
     currentSourceQuery = String(sourceQueryValue || '').trim();
+    currentSourceDisplay = deriveVisibleSourceDisplay(sourceLabel, currentSourceQuery);
     currentSourceIsExplicit = Boolean(
       currentSourceQuery &&
       sourceIsExplicit &&
@@ -2271,11 +2375,6 @@
     if (!normalizedName) return { source: '', strong: false };
 
     var candidates = [];
-    var rememberedSource = getRememberedSourceForFileName(normalizedName);
-    if (rememberedSource) {
-      pushUniqueCandidate(candidates, JSON.stringify({ source: rememberedSource, strong: true }));
-    }
-
     var querySource = stripSourceAnchor(getSourceFromQuery());
     var knownSources = [];
     if (querySource && looksLikeLoadableSource(querySource) && getSourceProtocol(querySource) !== LOCAL_DROP_SOURCE_PREFIX) {
@@ -2498,9 +2597,17 @@
   }
 
   function resolveRelativeAssets(rootEl, baseUrl) {
-    rootEl.querySelectorAll('img[src]').forEach(function (img) {
-      var src = img.getAttribute('src') || '';
-      if (!looksRelativePath(src)) return;
+    rootEl.querySelectorAll('img[data-clicker-src], img[src]').forEach(function (img) {
+      var rawSource = img.getAttribute('data-clicker-src') || img.getAttribute('src') || '';
+      var parsedImageSource = parseMarkdownImageSource(rawSource);
+      var src = parsedImageSource.href;
+      applyImageSizingAttributes(img, parsedImageSource);
+      img.removeAttribute('data-clicker-src');
+
+      if (!looksRelativePath(src)) {
+        img.setAttribute('src', src);
+        return;
+      }
 
       var resolvedLocalAsset = resolveLocalAssetUrl(src);
       if (resolvedLocalAsset) {
@@ -2591,7 +2698,7 @@
           strong: Boolean(droppedSourceInfo.strong)
         });
 
-        if (fileSource && looksLikeLoadableSource(fileSource) && (droppedSourceInfo.explicit || droppedSourceInfo.strong)) {
+        if (fileSource && looksLikeLoadableSource(fileSource) && droppedSourceInfo.explicit) {
           debugLog('handleDrop:file-loadable-source', fileSource);
           updateSourceQuery(fileSource);
           var droppedProtocol = '';
@@ -2614,11 +2721,26 @@
 
         var fileText = await file.text();
         var baseForFile = '';
-        if (fileSource && canBeBaseUrl(fileSource)) {
+        if (fileSource && canBeBaseUrl(fileSource) && (droppedSourceInfo.explicit || droppedSourceInfo.strong)) {
           try {
             baseForFile = new URL('.', fileSource).href;
           } catch (_error) {}
         }
+
+        if (fileSource && looksLikeLoadableSource(fileSource) && droppedSourceInfo.strong) {
+          var inferredLocalDropSource = createLocalDropSource(file.name || 'local file');
+          cacheLocalDropContent(inferredLocalDropSource, fileText);
+          updateSourceQuery(inferredLocalDropSource);
+          loadMarkdown(fileText, file.name || fileSource, baseForFile || '', inferredLocalDropSource, true);
+          debugLog('handleDrop:file-loaded-with-inferred-context', {
+            name: file.name,
+            chars: fileText.length,
+            source: fileSource,
+            localSource: inferredLocalDropSource
+          });
+          return;
+        }
+
         var localDropSource = createLocalDropSource(file.name || 'local file');
         cacheLocalDropContent(localDropSource, fileText);
         updateSourceQuery(localDropSource);

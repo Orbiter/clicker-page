@@ -2,11 +2,16 @@
 
 clicker.page turns Markdown into beautiful presentations.
 
-Throw a Markdown file or a link to a Markdown file onto it.
+- Throw a Markdown file onto this page
+- or a link to a Markdown file
+
+-> your file is instantly hosted an can be shared with your audience
+
+Click anywhere to see the manual.
 
 ---
 
-## Start Here
+## Keys and Functions
 
 - `ArrowRight` / `ArrowDown`: next slide
 - `ArrowLeft` / `ArrowUp`: previous slide
@@ -17,6 +22,8 @@ Throw a Markdown file or a link to a Markdown file onto it.
 
 The source URL stays visible in the header and can be copied or opened directly.
 
+-> Want to see the style guide? Click to get to the next page!
+
 ---
 
 ## Markdown Becomes Layout
@@ -25,6 +32,8 @@ Slides are split by natural authoring markers:
 
 - `#` and `##` headlines
 - horizontal rules `---`
+
+Everything between is a slide in your slide deck.
 
 Markdown then becomes a styled presentation surface with post-render layout rules.
 
@@ -38,19 +47,20 @@ Portrait images can trigger split-screen layouts.
 
 - image first: image on the left
 - image last: image on the right
-- full slide stays Markdown-driven, not Mermaid-driven
+
+The other side is your markdown text inside the same 
 
 ---
 
-## Landscape Images Can Become Hero Slides
+## One-Image-Only slides Become Hero Slides
 
 ![Landscape light example](./examples/landscape-light.svg)
 
-If a slide is only a headline plus one landscape image, it becomes a full-image hero slide.
+---
 
-- headline is painted over the image
-- color is adapted to the visible image region
-- great for title slides and section dividers
+## One-Image-Only slides Become Hero Slides
+
+![Landscape light example](./examples/landscape-dark.svg)
 
 ---
 
@@ -80,6 +90,8 @@ function renderSlideInto(targetEl, slideMarkdown, slideIndex, renderToken, optio
 - themed code surfaces
 - copy button
 - automatic width fitting
+
+Code automatically fits in the box, if required the font size is reduced.
 
 ---
 
@@ -118,9 +130,3 @@ function renderSlideInto(targetEl, slideMarkdown, slideIndex, renderToken, optio
 
 This makes `README.md` files, notes, docs, and demos presentation-ready without a second slide tool.
 
----
-## One Source Of Truth
-
-This `README.md` is the default clicker.page presentation.
-
-The example decks still exist for focused testing, but the main product story now lives here.
