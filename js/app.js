@@ -14,6 +14,9 @@
   var fontIncreaseBtnEl = document.getElementById('fontIncreaseBtn');
   var lightModeBtnEl = document.getElementById('lightModeBtn');
   var darkModeBtnEl = document.getElementById('darkModeBtn');
+  var devWatchGroupEl = document.getElementById('devWatchGroup');
+  var watchSourceBtnEl = document.getElementById('watchSourceBtn');
+  var themePresetGroupEl = document.getElementById('themePresetGroup');
 
   var slides = [];
   var currentIndex = 0;
@@ -45,6 +48,20 @@
   var UI_PREFS_STORAGE_KEY = 'clicker.page.ui-prefs:v1';
   var contentScale = 1;
   var currentTheme = 'light';
+  var currentPreset = 'default';
+  var themePresetButtons = [];
+  var slideRevealProgress = {};
+  var watchedFileHandle = null;
+  var watchedFileText = '';
+  var watchedSourceQuery = '';
+  var watchPollTimer = 0;
+  var watchPollBusy = false;
+  var THEME_PRESETS = [
+    { id: 'default', symbol: '○', name: 'Default' },
+    { id: 'ledger', symbol: '▦', name: 'Ledger / Terminal' },
+    { id: 'blueprint', symbol: '⌘', name: 'Blueprint / Midnight Ops' },
+    { id: 'ivory', symbol: '◫', name: 'Ivory / Signal' }
+  ];
 
   function debugLog(message, details) {
     var stamp = new Date().toISOString();
@@ -53,6 +70,10 @@
       return;
     }
     console.log('[clicker.page]', stamp, message, details);
+  }
+
+  function isLocalAppMode() {
+    return window.location.protocol === 'file:';
   }
 
   function clamp(number, min, max) {
@@ -70,6 +91,9 @@
       if (parsed.theme === 'dark' || parsed.theme === 'light') {
         currentTheme = parsed.theme;
       }
+      if (typeof parsed.preset === 'string' && THEME_PRESETS.some(function (preset) { return preset.id === parsed.preset; })) {
+        currentPreset = parsed.preset;
+      }
     } catch (_error) {}
   }
 
@@ -77,7 +101,8 @@
     try {
       localStorage.setItem(UI_PREFS_STORAGE_KEY, JSON.stringify({
         contentScale: contentScale,
-        theme: currentTheme
+        theme: currentTheme,
+        preset: currentPreset
       }));
     } catch (_error) {}
   }
@@ -85,12 +110,17 @@
   function updateThemeButtons() {
     if (lightModeBtnEl) lightModeBtnEl.classList.toggle('is-active', currentTheme === 'light');
     if (darkModeBtnEl) darkModeBtnEl.classList.toggle('is-active', currentTheme === 'dark');
+    if (watchSourceBtnEl) watchSourceBtnEl.classList.toggle('is-active', Boolean(watchedFileHandle));
+    themePresetButtons.forEach(function (button) {
+      button.classList.toggle('is-active', button.dataset.presetId === currentPreset);
+    });
   }
 
   function applyUiPreferences() {
     document.documentElement.style.setProperty('--content-scale', String(contentScale));
     document.body.classList.toggle('theme-dark', currentTheme === 'dark');
     document.body.classList.toggle('theme-light', currentTheme !== 'dark');
+    document.body.setAttribute('data-preset', currentPreset);
     updateThemeButtons();
   }
 
@@ -100,6 +130,28 @@
     currentTheme = theme;
     applyUiPreferences();
     saveUiPreferences();
+  }
+
+  function stopWatchingSourceFile() {
+    watchedFileHandle = null;
+    watchedFileText = '';
+    watchedSourceQuery = '';
+    watchPollBusy = false;
+    if (watchPollTimer) {
+      window.clearInterval(watchPollTimer);
+      watchPollTimer = 0;
+    }
+    updateThemeButtons();
+  }
+
+  function setPreset(presetId) {
+    if (!THEME_PRESETS.some(function (preset) { return preset.id === presetId; })) return;
+    if (currentPreset === presetId) return;
+    currentPreset = presetId;
+    applyUiPreferences();
+    saveUiPreferences();
+    updateView();
+    rebuildPrintDeck();
   }
 
   function adjustContentScale(delta) {
@@ -141,6 +193,28 @@
     debugLog('window.unhandledrejection', reason);
   });
 
+  function createThemePresetButtons() {
+    if (!themePresetGroupEl) return;
+    themePresetGroupEl.innerHTML = '';
+    themePresetButtons = [];
+
+    THEME_PRESETS.forEach(function (preset) {
+      var button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'header-btn header-btn--theme-preset';
+      button.textContent = preset.symbol;
+      button.title = preset.name;
+      button.setAttribute('aria-label', preset.name);
+      button.dataset.presetId = preset.id;
+      button.addEventListener('click', function () {
+        setPreset(preset.id);
+      });
+      themePresetGroupEl.appendChild(button);
+      themePresetButtons.push(button);
+    });
+  }
+
+  createThemePresetButtons();
   loadUiPreferences();
   applyUiPreferences();
 
@@ -663,6 +737,91 @@
     }
   }
 
+  function canUseLocalWatch() {
+    return Boolean(isLocalAppMode() && window.showOpenFilePicker);
+  }
+
+  function updateDevWatchAvailability() {
+    if (!devWatchGroupEl) return;
+    var enabled = canUseLocalWatch();
+    devWatchGroupEl.hidden = !enabled;
+    if (!enabled) {
+      stopWatchingSourceFile();
+    }
+  }
+
+  async function pollWatchedSourceFile() {
+    if (!watchedFileHandle || watchPollBusy) return;
+    watchPollBusy = true;
+
+    try {
+      var file = await watchedFileHandle.getFile();
+      var nextText = await file.text();
+      if (nextText === watchedFileText) return;
+
+      watchedFileText = nextText;
+      if (watchedSourceQuery) {
+        if (getSourceProtocol(watchedSourceQuery) === 'file:') {
+          cacheFileSourceContent(watchedSourceQuery, nextText);
+          markVerifiedFileSource(watchedSourceQuery);
+        } else if (getSourceProtocol(watchedSourceQuery) === LOCAL_DROP_SOURCE_PREFIX) {
+          cacheLocalDropContent(watchedSourceQuery, nextText);
+        }
+        loadMarkdown(nextText, watchedSourceQuery + ' (watch)', getSourceProtocol(watchedSourceQuery) === 'file:' ? watchedSourceQuery : '', watchedSourceQuery, true);
+      } else {
+        loadMarkdown(nextText, file.name || 'watched file', '', '', false);
+      }
+    } catch (error) {
+      debugLog('watchSource:poll-failed', String(error));
+      stopWatchingSourceFile();
+    } finally {
+      watchPollBusy = false;
+    }
+  }
+
+  async function enableLocalSourceWatch() {
+    if (!canUseLocalWatch()) return;
+
+    try {
+      var handles = await window.showOpenFilePicker({
+        multiple: false,
+        excludeAcceptAllOption: false,
+        types: [{
+          description: 'Markdown files',
+          accept: {
+            'text/markdown': ['.md', '.markdown', '.mdown', '.mkd']
+          }
+        }]
+      });
+      var handle = handles && handles[0];
+      if (!handle) return;
+
+      var file = await handle.getFile();
+      watchedFileHandle = handle;
+      watchedFileText = await file.text();
+
+      var selectedSource = '';
+      if (getSourceProtocol(currentSourceQuery) === 'file:' && getSourceBasename(currentSourceQuery) === handle.name) {
+        selectedSource = currentSourceQuery;
+        cacheFileSourceContent(selectedSource, watchedFileText);
+        markVerifiedFileSource(selectedSource);
+      } else {
+        selectedSource = createLocalDropSource(handle.name || 'local file');
+        cacheLocalDropContent(selectedSource, watchedFileText);
+      }
+      watchedSourceQuery = selectedSource;
+      loadMarkdown(watchedFileText, handle.name || selectedSource, getSourceProtocol(selectedSource) === 'file:' ? selectedSource : '', selectedSource, true);
+
+      if (watchPollTimer) window.clearInterval(watchPollTimer);
+      watchPollTimer = window.setInterval(pollWatchedSourceFile, 1500);
+      updateThemeButtons();
+    } catch (error) {
+      if (error && error.name === 'AbortError') return;
+      debugLog('watchSource:enable-failed', String(error));
+      stopWatchingSourceFile();
+    }
+  }
+
   function rememberSourceForFileName(source) {
     var normalizedSource = stripSourceAnchor(String(source || '').trim());
     if (!normalizedSource) return;
@@ -726,17 +885,18 @@
     var button = document.createElement('button');
     button.type = 'button';
     button.className = 'copy-code-btn';
-    button.textContent = 'Copy';
+    button.textContent = '⧉';
     button.setAttribute('aria-label', 'Copy code to clipboard');
+    button.setAttribute('title', 'Copy code');
 
     button.addEventListener('click', async function () {
       var originalLabel = button.textContent;
       button.disabled = true;
       try {
         await copyToClipboard(getText());
-        button.textContent = 'Copied';
+        button.textContent = '✓';
       } catch (_error) {
-        button.textContent = 'Error';
+        button.textContent = '!';
       }
       window.setTimeout(function () {
         button.textContent = originalLabel;
@@ -1136,6 +1296,91 @@
     });
   }
 
+  function getRevealRoot(rootEl) {
+    if (!rootEl) return null;
+    return rootEl.querySelector('.slide-split-pane--content, .slide-split-pane--content-first') || rootEl;
+  }
+
+  function getDirectListItems(listEl) {
+    return Array.from(listEl.children || []).filter(function (child) {
+      return child.tagName && child.tagName.toUpperCase() === 'LI';
+    });
+  }
+
+  function getEligibleRevealList(rootEl) {
+    var revealRoot = getRevealRoot(rootEl);
+    if (!revealRoot) return null;
+
+    var lastMeaningful = getLastMeaningfulElement(revealRoot);
+    if (!lastMeaningful) return null;
+    if (!lastMeaningful.tagName || lastMeaningful.tagName.toUpperCase() !== 'UL') return null;
+    if (lastMeaningful.parentElement !== revealRoot) return null;
+
+    var items = getDirectListItems(lastMeaningful);
+    if (items.length < 2) return null;
+
+    return {
+      listEl: lastMeaningful,
+      items: items
+    };
+  }
+
+  function clearBulletRevealState(rootEl) {
+    if (!rootEl) return;
+    rootEl.__revealListState = null;
+    rootEl.querySelectorAll('.reveal-list').forEach(function (listEl) {
+      listEl.classList.remove('reveal-list');
+    });
+    rootEl.querySelectorAll('.reveal-item--hidden').forEach(function (itemEl) {
+      itemEl.classList.remove('reveal-item--hidden');
+    });
+    rootEl.querySelectorAll('.reveal-item--next-cue').forEach(function (itemEl) {
+      itemEl.classList.remove('reveal-item--next-cue');
+    });
+  }
+
+  function applyBulletReveal(rootEl, slideIndex, enabled) {
+    clearBulletRevealState(rootEl);
+    if (!enabled) return;
+
+    var reveal = getEligibleRevealList(rootEl);
+    if (!reveal) return;
+
+    var total = reveal.items.length;
+    var visibleCount = Number(slideRevealProgress[slideIndex]);
+    if (!Number.isFinite(visibleCount)) visibleCount = 1;
+    visibleCount = clamp(Math.floor(visibleCount), 1, total);
+    slideRevealProgress[slideIndex] = visibleCount;
+
+    reveal.listEl.classList.add('reveal-list');
+    reveal.items.forEach(function (itemEl, index) {
+      itemEl.classList.toggle('reveal-item--hidden', index >= visibleCount);
+      itemEl.classList.toggle('reveal-item--next-cue', index === visibleCount - 1 && visibleCount < total);
+    });
+
+    rootEl.__revealListState = {
+      slideIndex: slideIndex,
+      visibleCount: visibleCount,
+      total: total
+    };
+  }
+
+  function stepBulletReveal(direction) {
+    var state = slideEl && slideEl.__revealListState;
+    if (!state || state.slideIndex !== currentIndex) return false;
+
+    if (direction > 0) {
+      if (state.visibleCount >= state.total) return false;
+      slideRevealProgress[currentIndex] = state.visibleCount + 1;
+    } else {
+      if (state.visibleCount <= 1) return false;
+      slideRevealProgress[currentIndex] = state.visibleCount - 1;
+    }
+
+    applyBulletReveal(slideEl, currentIndex, true);
+    return true;
+  }
+
   function getOnlyImageSlideParts(rootEl) {
     var children = getMeaningfulSlideChildren(rootEl);
     var headline = null;
@@ -1479,10 +1724,12 @@
     mountRenderedContent(targetEl, renderedTemplate.content);
     var mermaidRender = renderMermaidBlocks(targetEl);
     enhanceCodeBlocks(targetEl);
+    enhanceTables(targetEl);
     return Promise.resolve(mermaidRender).then(function () {
       applyChainEffects(targetEl);
       return applySlideLayout(targetEl, renderToken, slideIndex, settings);
     }).then(function () {
+      applyBulletReveal(targetEl, slideIndex, settings.enableReveal !== false);
       fitCodeBlocks(targetEl);
       if (settings.animateMarkers === false) return;
       animateMarkerHighlights(targetEl, renderToken);
@@ -1523,6 +1770,78 @@
 
       codeEl.replaceWith(codeTable);
       pre.appendChild(createCopyButton(function () { return source; }));
+    });
+  }
+
+  function isImageOnlyTableCell(cellEl) {
+    if (!cellEl) return false;
+    if (!cellEl.querySelector('img')) return false;
+
+    var clone = cellEl.cloneNode(true);
+    clone.querySelectorAll('img').forEach(function (img) { img.remove(); });
+    return !clone.textContent.trim();
+  }
+
+  function enhanceTables(rootEl) {
+    if (!rootEl) return;
+
+    rootEl.querySelectorAll('table').forEach(function (tableEl) {
+      tableEl.classList.add('table-card');
+
+      var hasImages = false;
+      var onlyImageCells = true;
+      var nonEmptyCellCount = 0;
+
+      Array.from(tableEl.rows || []).forEach(function (rowEl) {
+        Array.from(rowEl.cells || []).forEach(function (cellEl) {
+          var hasContent = Boolean(cellEl.textContent.trim()) || Boolean(cellEl.querySelector('img, svg'));
+          if (!hasContent) return;
+
+          nonEmptyCellCount += 1;
+          var imageOnly = isImageOnlyTableCell(cellEl);
+          if (imageOnly) hasImages = true;
+          if (!imageOnly) onlyImageCells = false;
+        });
+      });
+
+      if (hasImages && onlyImageCells && nonEmptyCellCount > 0) {
+        tableEl.classList.add('table-card--image-grid');
+        return;
+      }
+
+      var rows = Array.from(tableEl.rows || []);
+      var columnCount = rows.reduce(function (max, rowEl) {
+        return Math.max(max, (rowEl.cells || []).length);
+      }, 0);
+
+      for (var columnIndex = 0; columnIndex < columnCount; columnIndex += 1) {
+        var numericCells = 0;
+        var textCells = 0;
+
+        rows.forEach(function (rowEl, rowIndex) {
+          var cellEl = rowEl.cells && rowEl.cells[columnIndex];
+          if (!cellEl) return;
+          if (rowIndex === 0 && rowEl.parentElement && rowEl.parentElement.tagName && rowEl.parentElement.tagName.toUpperCase() === 'THEAD') {
+            return;
+          }
+
+          var value = cellEl.textContent.trim();
+          if (!value) return;
+          if (/^[+\-]?(?:\d{1,3}(?:[,\s]\d{3})*|\d+)(?:\.\d+)?%?$/.test(value)) {
+            numericCells += 1;
+          } else {
+            textCells += 1;
+          }
+        });
+
+        var align = numericCells > 0 && textCells === 0 ? 'right' : 'left';
+        tableEl.querySelectorAll('tr').forEach(function (rowEl) {
+          var cellEl = rowEl.cells && rowEl.cells[columnIndex];
+          if (!cellEl) return;
+          cellEl.classList.toggle('table-align-right', align === 'right');
+          cellEl.classList.toggle('table-align-left', align !== 'right');
+        });
+      }
     });
   }
 
@@ -1679,6 +1998,7 @@
     } else {
       sourceLabelEl.setAttribute('aria-hidden', 'true');
     }
+    updateDevWatchAvailability();
   }
 
   function updateSourceQuery(source) {
@@ -1739,7 +2059,8 @@
     renderSlideInto(slideEl, slides[currentIndex], currentIndex, renderToken, {
       allowIntroQr: true,
       animateMarkers: true,
-      baseUrl: currentBaseUrl
+      baseUrl: currentBaseUrl,
+      enableReveal: true
     }).then(function () {
       if (renderToken !== viewRenderToken) return;
     }).catch(function (error) {
@@ -1754,6 +2075,7 @@
   }
 
   function goNext() {
+    if (stepBulletReveal(1)) return;
     if (currentIndex < slides.length - 1) {
       currentIndex += 1;
       updateView();
@@ -1761,6 +2083,7 @@
   }
 
   function goPrev() {
+    if (stepBulletReveal(-1)) return;
     if (currentIndex > 0) {
       currentIndex -= 1;
       updateView();
@@ -1784,7 +2107,8 @@
       return renderSlideInto(printSlide, slideMarkdown, slideIndex, renderToken, {
         allowIntroQr: false,
         animateMarkers: false,
-        baseUrl: currentBaseUrl
+        baseUrl: currentBaseUrl,
+        enableReveal: false
       });
     });
 
@@ -1804,6 +2128,7 @@
     currentDeckHashPending = true;
 
     slides = splitSlides(trimmed);
+    slideRevealProgress = {};
     currentSourceQuery = String(sourceQueryValue || '').trim();
     currentSourceIsExplicit = Boolean(
       currentSourceQuery &&
@@ -1811,6 +2136,7 @@
       getSourceProtocol(currentSourceQuery) !== LOCAL_DROP_SOURCE_PREFIX
     );
     if (currentSourceIsExplicit) rememberSourceForFileName(currentSourceQuery);
+    if (!canUseLocalWatch()) stopWatchingSourceFile();
     currentIndex = resolveInitialSlideIndex(currentSourceQuery, slides);
     currentBaseUrl = typeof baseUrl === 'string' ? baseUrl : window.location.href;
     updateHeaderSourceLabel();
@@ -2343,6 +2669,12 @@
   if (darkModeBtnEl) {
     darkModeBtnEl.addEventListener('click', function () {
       setTheme('dark');
+    });
+  }
+
+  if (watchSourceBtnEl) {
+    watchSourceBtnEl.addEventListener('click', function () {
+      enableLocalSourceWatch();
     });
   }
 

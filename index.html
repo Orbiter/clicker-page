@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>clicker.page</title>
-  <link rel="stylesheet" href="./css/style.css?v=47">
+  <link rel="stylesheet" href="./css/style.css?v=64">
 </head>
 <body>
   <header class="header">
@@ -12,6 +12,9 @@
       <a class="brand-name" id="brandHomeLink" href="https://clicker.page">clicker.page</a><a class="brand-source" id="sourceLabel" href=""></a>
     </div>
     <div class="header-right">
+      <div class="header-group" id="devWatchGroup" role="group" aria-label="Development watch" hidden>
+        <button class="header-btn" id="watchSourceBtn" type="button" aria-label="Watch local source file for changes" title="Watch local source file for changes">⟲</button>
+      </div>
       <div class="header-group" role="group" aria-label="Font size">
         <button class="header-btn" id="fontDecreaseBtn" type="button" aria-label="Decrease content font size">−</button>
         <button class="header-btn" id="fontResetBtn" type="button" aria-label="Reset content font size">1</button>
@@ -21,6 +24,7 @@
         <button class="header-btn" id="lightModeBtn" type="button" aria-label="Light mode">☀</button>
         <button class="header-btn" id="darkModeBtn" type="button" aria-label="Dark mode">☾</button>
       </div>
+      <div class="header-group header-group--themes" id="themePresetGroup" role="group" aria-label="Theme preset"></div>
     </div>
   </header>
 
@@ -47,6 +51,6 @@
   <script src="./js/marked.min.js?v=1"></script>
   <script src="./js/mermaid.min.js?v=1"></script>
   <script src="./js/qrcode.min.js?v=1"></script>
-  <script src="./js/app.js?v=67"></script>
+  <script src="./js/app.js?v=76"></script>
 </body>
 </html>
