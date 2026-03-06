@@ -67,12 +67,20 @@ The architecture must stay clean, minimal, and easy to reason about.
 ## Dependency Policy
 
 - Avoid external runtime dependencies when possible.
+- Never load JS or CSS from a remote CDN at runtime.
+- If a new third-party JS or CSS asset is required, download it once and vendor it into the local `/js/` or `/css/` folder, then reference that local file.
 - Any new CSS utility or JS library must be evaluated for:
   - bundle/runtime weight,
   - simplicity,
   - long-term maintainability,
   - necessity for core functionality.
 - If a dependency is not clearly needed, do not include it.
+
+## Local Browser Verification
+
+- You may use the locally installed Google Chrome browser to test and inspect the page yourself.
+- Prefer local browser verification for layout, styling, interaction, and rendering issues instead of asking the user to manually confirm each change.
+- If browser automation or local serving is required for verification, it is allowed.
 
 ## Architecture Guidance
 
@@ -90,4 +98,3 @@ The architecture must stay clean, minimal, and easy to reason about.
 - No heavy UI frameworks.
 - No visual bloat.
 - No feature creep that compromises the one-page slide experience.
-
