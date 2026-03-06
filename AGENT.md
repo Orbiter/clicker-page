@@ -81,6 +81,8 @@ The architecture must stay clean, minimal, and easy to reason about.
 - You may use the locally installed Google Chrome browser to test and inspect the page yourself.
 - Prefer local browser verification for layout, styling, interaction, and rendering issues instead of asking the user to manually confirm each change.
 - If browser automation or local serving is required for verification, it is allowed.
+- Do not fake or guess visual/rendering fixes without verifying them in the browser when browser verification is possible.
+- Do not rely on one-off filename hacks or example-specific shortcuts to claim a rendering bug is fixed.
 
 ## Architecture Guidance
 

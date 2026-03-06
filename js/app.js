@@ -21,7 +21,17 @@
   var mermaidRenderCount = 0;
   var viewRenderToken = 0;
   var FILE_SOURCE_CACHE_PREFIX = 'clicker.page.file-source-cache:v2:';
-  var FILE_NAME_SOURCE_CACHE_PREFIX = 'clicker.page.file-name-source-cache:v2:';
+  var VERIFIED_FILE_SOURCE_PREFIX = 'clicker.page.verified-file-source:v2:';
+  var FILE_NAME_SOURCE_CACHE_PREFIX = 'clicker.page.file-name-source-cache:v3:';
+  var LOCAL_DROP_CACHE_PREFIX = 'clicker.page.local-drop:v1:';
+  var LOCAL_DROP_SOURCE_PREFIX = 'localdrop:';
+  var localAssetContexts = {};
+  var currentDeckContentHash = '';
+  var currentDeckHashPending = false;
+  var deckHashToken = 0;
+  var LOCAL_ASSET_DB_NAME = 'clicker.page.local-assets';
+  var LOCAL_ASSET_DB_VERSION = 1;
+  var LOCAL_ASSET_STORE = 'deck-contexts';
 
   function debugLog(message, details) {
     var stamp = new Date().toISOString();
@@ -71,11 +81,417 @@
   }
 
   function getSourceProtocol(source) {
+    var normalized = String(source || '').trim();
+    if (normalized.indexOf(LOCAL_DROP_SOURCE_PREFIX) === 0) return LOCAL_DROP_SOURCE_PREFIX;
     try {
-      return new URL(String(source || '').trim()).protocol;
+      return new URL(normalized).protocol;
     } catch (_error) {
       return '';
     }
+  }
+
+  function createLocalDropSource(fileName) {
+    var normalizedName = String(fileName || '').trim() || 'local.md';
+    var randomPart = Math.random().toString(36).slice(2, 10);
+    var stampPart = Date.now().toString(36);
+    return LOCAL_DROP_SOURCE_PREFIX + stampPart + '-' + randomPart + '/' + encodeURIComponent(normalizedName);
+  }
+
+  function stripLocalDropAnchor(source) {
+    return String(source || '').trim().replace(/#.*$/, '');
+  }
+
+  function cacheLocalDropContent(source, markdown) {
+    var normalizedSource = stripLocalDropAnchor(source);
+    if (!normalizedSource) return;
+    if (getSourceProtocol(normalizedSource) !== LOCAL_DROP_SOURCE_PREFIX) return;
+    try {
+      localStorage.setItem(LOCAL_DROP_CACHE_PREFIX + normalizedSource, String(markdown || ''));
+      debugLog('localDrop:stored', { source: normalizedSource, bytes: String(markdown || '').length });
+    } catch (_error) {
+      debugLog('localDrop:store-failed', { source: normalizedSource });
+    }
+  }
+
+  function getCachedLocalDropContent(source) {
+    var normalizedSource = stripLocalDropAnchor(source);
+    if (!normalizedSource) return '';
+    if (getSourceProtocol(normalizedSource) !== LOCAL_DROP_SOURCE_PREFIX) return '';
+    try {
+      var cached = localStorage.getItem(LOCAL_DROP_CACHE_PREFIX + normalizedSource) || '';
+      debugLog('localDrop:lookup', { source: normalizedSource, hit: Boolean(cached) });
+      return cached;
+    } catch (_error) {
+      debugLog('localDrop:read-failed', { source: normalizedSource });
+      return '';
+    }
+  }
+
+  function getCurrentDeckContextKey() {
+    return stripSourceAnchor(String(currentSourceQuery || '').trim());
+  }
+
+  function canPersistDirectoryHandles() {
+    return Boolean(window.isSecureContext && window.indexedDB && window.showDirectoryPicker);
+  }
+
+  function openLocalAssetDb() {
+    return new Promise(function (resolve, reject) {
+      if (!window.indexedDB) {
+        reject(new Error('IndexedDB unavailable'));
+        return;
+      }
+
+      var request = window.indexedDB.open(LOCAL_ASSET_DB_NAME, LOCAL_ASSET_DB_VERSION);
+      request.onupgradeneeded = function () {
+        var db = request.result;
+        if (!db.objectStoreNames.contains(LOCAL_ASSET_STORE)) {
+          db.createObjectStore(LOCAL_ASSET_STORE);
+        }
+      };
+      request.onsuccess = function () { resolve(request.result); };
+      request.onerror = function () { reject(request.error || new Error('IndexedDB open failed')); };
+    });
+  }
+
+  function withLocalAssetStore(mode, worker) {
+    return openLocalAssetDb().then(function (db) {
+      return new Promise(function (resolve, reject) {
+        var tx = db.transaction(LOCAL_ASSET_STORE, mode);
+        var store = tx.objectStore(LOCAL_ASSET_STORE);
+        var request;
+
+        try {
+          request = worker(store);
+        } catch (error) {
+          db.close();
+          reject(error);
+          return;
+        }
+
+        tx.oncomplete = function () {
+          db.close();
+          resolve(request && typeof request.result !== 'undefined' ? request.result : undefined);
+        };
+        tx.onerror = function () {
+          db.close();
+          reject(tx.error || new Error('IndexedDB transaction failed'));
+        };
+        tx.onabort = function () {
+          db.close();
+          reject(tx.error || new Error('IndexedDB transaction aborted'));
+        };
+      });
+    });
+  }
+
+  function persistDirectoryHandleForDeckHash(hash, handle) {
+    if (!hash || !handle || !canPersistDirectoryHandles()) return Promise.resolve();
+    return withLocalAssetStore('readwrite', function (store) {
+      return store.put(handle, hash);
+    }).then(function () {
+      debugLog('localAssetHandle:stored', { hash: hash });
+    }).catch(function (error) {
+      debugLog('localAssetHandle:store-failed', String(error));
+    });
+  }
+
+  function loadPersistedDirectoryHandle(hash) {
+    if (!hash || !canPersistDirectoryHandles()) return Promise.resolve(null);
+    return withLocalAssetStore('readonly', function (store) {
+      return store.get(hash);
+    }).then(function (handle) {
+      debugLog('localAssetHandle:lookup', { hash: hash, hit: Boolean(handle) });
+      return handle || null;
+    }).catch(function (error) {
+      debugLog('localAssetHandle:read-failed', String(error));
+      return null;
+    });
+  }
+
+  function deletePersistedDirectoryHandle(hash) {
+    if (!hash || !canPersistDirectoryHandles()) return Promise.resolve();
+    return withLocalAssetStore('readwrite', function (store) {
+      return store.delete(hash);
+    }).then(function () {
+      debugLog('localAssetHandle:deleted', { hash: hash });
+    }).catch(function (error) {
+      debugLog('localAssetHandle:delete-failed', String(error));
+    });
+  }
+
+  function hashMarkdownContent(markdown) {
+    if (!(window.crypto && window.crypto.subtle && window.TextEncoder)) {
+      return Promise.resolve('');
+    }
+
+    var bytes = new window.TextEncoder().encode(String(markdown || ''));
+    return window.crypto.subtle.digest('SHA-256', bytes).then(function (digest) {
+      return Array.from(new Uint8Array(digest)).map(function (byte) {
+        return byte.toString(16).padStart(2, '0');
+      }).join('');
+    }).catch(function () {
+      return '';
+    });
+  }
+
+  function normalizeRelativeAssetPath(path) {
+    return String(path || '')
+      .trim()
+      .replace(/[?#].*$/, '')
+      .replace(/\\/g, '/')
+      .replace(/^\.\/+/, '')
+      .replace(/^\/+/, '');
+  }
+
+  function getLocalAssetContext(deckKey) {
+    return localAssetContexts[String(deckKey || '').trim()] || null;
+  }
+
+  function setLocalAssetContext(deckKey, context) {
+    var normalizedDeckKey = String(deckKey || '').trim();
+    if (!normalizedDeckKey) return;
+
+    var previous = localAssetContexts[normalizedDeckKey];
+    if (previous && Array.isArray(previous.urls)) {
+      previous.urls.forEach(function (url) {
+        try {
+          URL.revokeObjectURL(url);
+        } catch (_error) {}
+      });
+    }
+
+    localAssetContexts[normalizedDeckKey] = context;
+  }
+
+  function clearLocalAssetContext(deckKey) {
+    var normalizedDeckKey = String(deckKey || '').trim();
+    if (!normalizedDeckKey) return;
+    var previous = localAssetContexts[normalizedDeckKey];
+    if (previous && Array.isArray(previous.urls)) {
+      previous.urls.forEach(function (url) {
+        try {
+          URL.revokeObjectURL(url);
+        } catch (_error) {}
+      });
+    }
+    delete localAssetContexts[normalizedDeckKey];
+  }
+
+  async function createLocalAssetContext(entries) {
+    var mapping = {};
+    var urls = [];
+    var normalizedEntries = Array.from(entries || []);
+
+    for (var entryIndex = 0; entryIndex < normalizedEntries.length; entryIndex += 1) {
+      var entry = normalizedEntries[entryIndex];
+      if (!entry || !entry.file) continue;
+      var file = entry.file;
+      var relativePath = String(entry.relativePath || file.webkitRelativePath || file.name || '').trim();
+      if (!relativePath) continue;
+
+      var normalizedPath = relativePath.replace(/\\/g, '/');
+      var slashIndex = normalizedPath.indexOf('/');
+      if (slashIndex !== -1) {
+        normalizedPath = normalizedPath.slice(slashIndex + 1);
+      }
+
+      normalizedPath = normalizeRelativeAssetPath(normalizedPath);
+      if (!normalizedPath || mapping[normalizedPath]) continue;
+
+      var objectUrl = URL.createObjectURL(file);
+      mapping[normalizedPath] = {
+        url: objectUrl,
+        tone: await guessAssetTone(file)
+      };
+      urls.push(objectUrl);
+    }
+
+    return { files: mapping, urls: urls };
+  }
+
+  function parseHexColor(value) {
+    var normalized = String(value || '').trim();
+    if (!normalized) return null;
+    var hex = normalized.replace(/^#/, '');
+    if (hex.length === 3) {
+      hex = hex.split('').map(function (char) { return char + char; }).join('');
+    }
+    if (!/^[0-9a-fA-F]{6}$/.test(hex)) return null;
+    return {
+      r: parseInt(hex.slice(0, 2), 16),
+      g: parseInt(hex.slice(2, 4), 16),
+      b: parseInt(hex.slice(4, 6), 16)
+    };
+  }
+
+  function toneFromRgb(rgb) {
+    if (!rgb) return '';
+    var luminance = (0.2126 * rgb.r) + (0.7152 * rgb.g) + (0.0722 * rgb.b);
+    return luminance < 145 ? 'dark' : 'light';
+  }
+
+  function extractSvgToneFromMarkup(markup) {
+    var svgText = String(markup || '');
+    if (!svgText) return '';
+
+    var rectMatch = svgText.match(/<rect[^>]*\bwidth=["'](?:100%|1600|1920|1280)["'][^>]*\bheight=["'](?:100%|900|1080|720)["'][^>]*\bfill=["']([^"']+)["']/i) ||
+      svgText.match(/<rect[^>]*\bfill=["']([^"']+)["'][^>]*\bwidth=["'](?:100%|1600|1920|1280)["'][^>]*\bheight=["'](?:100%|900|1080|720)["']/i) ||
+      svgText.match(/<rect[^>]*\bfill=["']([^"']+)["']/i);
+
+    if (!rectMatch) return '';
+    return toneFromRgb(parseHexColor(rectMatch[1]));
+  }
+
+  async function guessAssetTone(file) {
+    if (!file) return '';
+    if (!/\.svg$/i.test(file.name || '')) return '';
+    try {
+      return extractSvgToneFromMarkup(await file.text());
+    } catch (_error) {
+      return '';
+    }
+  }
+
+  async function createLocalAssetContextFromDirectoryHandle(directoryHandle) {
+    var collectedFiles = [];
+
+    async function walkDirectory(handle, prefix) {
+      for await (var entry of handle.values()) {
+        if (entry.kind === 'file') {
+          var file = await entry.getFile();
+          collectedFiles.push({
+            file: file,
+            relativePath: prefix ? prefix + '/' + entry.name : entry.name
+          });
+        } else if (entry.kind === 'directory') {
+          await walkDirectory(entry, prefix ? prefix + '/' + entry.name : entry.name);
+        }
+      }
+    }
+
+    await walkDirectory(directoryHandle, '');
+    return createLocalAssetContext(collectedFiles);
+  }
+
+  function invalidatePersistedLocalAssetContext(deckKey, hash) {
+    clearLocalAssetContext(deckKey);
+    if (hash) {
+      deletePersistedDirectoryHandle(hash);
+    }
+  }
+
+  function resolveLocalAssetUrl(relativePath) {
+    var deckKey = getCurrentDeckContextKey();
+    if (!deckKey) return '';
+    var context = getLocalAssetContext(deckKey);
+    if (!context || !context.files) return '';
+    var entry = context.files[normalizeRelativeAssetPath(relativePath)] || null;
+    if (!entry && context.persistent && context.hash) {
+      invalidatePersistedLocalAssetContext(deckKey, context.hash);
+    }
+    return entry && entry.url ? entry.url : '';
+  }
+
+  function resolveLocalAssetTone(relativePath) {
+    var deckKey = getCurrentDeckContextKey();
+    if (!deckKey) return '';
+    var context = getLocalAssetContext(deckKey);
+    if (!context || !context.files) return '';
+    var entry = context.files[normalizeRelativeAssetPath(relativePath)] || null;
+    return entry && entry.tone ? entry.tone : '';
+  }
+
+  function createMissingAssetPlaceholder(originalPath) {
+    var placeholder = document.createElement('button');
+    placeholder.type = 'button';
+    placeholder.className = 'missing-asset-marker';
+    placeholder.textContent = '!';
+    placeholder.setAttribute('aria-label', 'Select local asset folder');
+    placeholder.title = 'Relative image path cannot be resolved from this dropped deck. Click to choose the deck folder so clicker.page can load local sibling files.';
+    placeholder.dataset.relativeAssetPath = String(originalPath || '');
+    placeholder.addEventListener('click', function (event) {
+      event.preventDefault();
+      event.stopPropagation();
+      promptForLocalAssetContext();
+    });
+    return placeholder;
+  }
+
+  async function restorePersistedLocalAssetContext(markdownHash, deckKey, renderToken) {
+    if (!markdownHash || !deckKey || !canPersistDirectoryHandles()) return false;
+
+    var existing = getLocalAssetContext(deckKey);
+    if (existing && existing.hash === markdownHash) return true;
+
+    var handle = await loadPersistedDirectoryHandle(markdownHash);
+    if (!handle) return false;
+
+    var permission = 'prompt';
+    try {
+      permission = await handle.queryPermission({ mode: 'read' });
+    } catch (_error) {}
+    if (permission !== 'granted') return false;
+
+    try {
+      var context = await createLocalAssetContextFromDirectoryHandle(handle);
+      context.hash = markdownHash;
+      context.handle = handle;
+      context.persistent = true;
+      if (renderToken !== deckHashToken) return false;
+      setLocalAssetContext(deckKey, context);
+      updateView();
+      return true;
+    } catch (_error) {
+      invalidatePersistedLocalAssetContext(deckKey, markdownHash);
+      return false;
+    }
+  }
+
+  async function promptForLocalAssetContext() {
+    var deckKey = getCurrentDeckContextKey();
+    if (!deckKey) return;
+
+    if (window.showDirectoryPicker && window.isSecureContext) {
+      try {
+        var directoryHandle = await window.showDirectoryPicker({ mode: 'read' });
+        var contextFromHandle = await createLocalAssetContextFromDirectoryHandle(directoryHandle);
+        contextFromHandle.handle = directoryHandle;
+        contextFromHandle.hash = currentDeckContentHash;
+        contextFromHandle.persistent = Boolean(currentDeckContentHash);
+        setLocalAssetContext(deckKey, contextFromHandle);
+        if (currentDeckContentHash) {
+          persistDirectoryHandleForDeckHash(currentDeckContentHash, directoryHandle);
+        }
+        updateView();
+        return;
+      } catch (_error) {}
+    }
+
+    var picker = document.createElement('input');
+    picker.type = 'file';
+    picker.multiple = true;
+    picker.setAttribute('webkitdirectory', '');
+    picker.setAttribute('directory', '');
+    picker.style.position = 'fixed';
+    picker.style.left = '-9999px';
+    picker.style.top = '0';
+
+    picker.addEventListener('change', function () {
+      var files = picker.files;
+      if (files && files.length) {
+        createLocalAssetContext(Array.from(files).map(function (file) {
+          return { file: file, relativePath: file.webkitRelativePath || file.name };
+        })).then(function (context) {
+          setLocalAssetContext(deckKey, context);
+          updateView();
+        });
+      }
+      if (picker.parentNode) picker.parentNode.removeChild(picker);
+    }, { once: true });
+
+    document.body.appendChild(picker);
+    picker.click();
   }
 
   function rewriteGitHubBlobToRaw(source) {
@@ -121,6 +537,32 @@
     }
   }
 
+  function markVerifiedFileSource(source) {
+    var normalizedSource = stripSourceAnchor(String(source || '').trim());
+    if (!normalizedSource) return;
+    if (getSourceProtocol(normalizedSource) !== 'file:') return;
+    try {
+      localStorage.setItem(VERIFIED_FILE_SOURCE_PREFIX + normalizedSource, '1');
+      debugLog('verifiedFileSource:stored', { source: normalizedSource });
+    } catch (_error) {
+      debugLog('verifiedFileSource:store-failed', { source: normalizedSource });
+    }
+  }
+
+  function isVerifiedFileSource(source) {
+    var normalizedSource = stripSourceAnchor(String(source || '').trim());
+    if (!normalizedSource) return false;
+    if (getSourceProtocol(normalizedSource) !== 'file:') return false;
+    try {
+      var verified = localStorage.getItem(VERIFIED_FILE_SOURCE_PREFIX + normalizedSource) === '1';
+      debugLog('verifiedFileSource:lookup', { source: normalizedSource, hit: verified });
+      return verified;
+    } catch (_error) {
+      debugLog('verifiedFileSource:read-failed', { source: normalizedSource });
+      return false;
+    }
+  }
+
   function getSourceBasename(source) {
     try {
       var pathname = new URL(stripSourceAnchor(String(source || '').trim())).pathname || '';
@@ -134,6 +576,7 @@
   function rememberSourceForFileName(source) {
     var normalizedSource = stripSourceAnchor(String(source || '').trim());
     if (!normalizedSource) return;
+    if (getSourceProtocol(normalizedSource) === LOCAL_DROP_SOURCE_PREFIX) return;
     var basename = getSourceBasename(normalizedSource);
     if (!basename) return;
     try {
@@ -446,6 +889,28 @@
       colorLight: '#ffffff',
       correctLevel: window.QRCode.CorrectLevel ? window.QRCode.CorrectLevel.M : undefined
     });
+  }
+
+  function isLikelyMobileClient() {
+    if (navigator.userAgentData && typeof navigator.userAgentData.mobile === 'boolean') {
+      return navigator.userAgentData.mobile;
+    }
+
+    var ua = String(navigator.userAgent || '');
+    if (/Android|webOS|iPhone|iPod|BlackBerry|IEMobile|Opera Mini/i.test(ua)) {
+      return true;
+    }
+
+    if (/iPad/i.test(ua)) return false;
+
+    var coarsePointer = false;
+    var narrowViewport = false;
+    try {
+      coarsePointer = window.matchMedia('(pointer: coarse)').matches;
+      narrowViewport = window.matchMedia('(max-width: 820px)').matches;
+    } catch (_error) {}
+
+    return coarsePointer && narrowViewport;
   }
 
   function applyFirstSlideQrLayout(rootEl) {
@@ -826,6 +1291,9 @@
     rootEl.classList.add('slide--image-hero');
 
     var resolvedTone = title ? getHeroTitleTone(rootEl, parts.imageEl, title) : null;
+    if (!resolvedTone && parts.imageEl && parts.imageEl.dataset) {
+      resolvedTone = parts.imageEl.dataset.localAssetTone || '';
+    }
     if (resolvedTone === 'dark') {
       overlay.classList.add('slide-image-hero__overlay--light-text');
     } else if (resolvedTone === 'light') {
@@ -840,7 +1308,7 @@
     rootEl.classList.remove('slide--intro-qr');
     rootEl.classList.remove('slide--image-hero');
 
-    if (currentIndex === 0) {
+    if (currentIndex === 0 && !isLikelyMobileClient()) {
       applyFirstSlideQrLayout(rootEl);
       return;
     }
@@ -1092,8 +1560,13 @@
     viewRenderToken = renderToken;
     currentIndex = Math.max(0, Math.min(currentIndex, total - 1));
     syncCurrentSlideSourceQuery();
-    slideEl.innerHTML = renderMarkdown(slides[currentIndex]);
-    resolveRelativeAssets(slideEl, currentBaseUrl);
+    var renderedTemplate = document.createElement('template');
+    renderedTemplate.innerHTML = renderMarkdown(slides[currentIndex]);
+    resolveRelativeAssets(renderedTemplate.content, currentBaseUrl);
+    slideEl.innerHTML = '';
+    while (renderedTemplate.content.firstChild) {
+      slideEl.appendChild(renderedTemplate.content.firstChild);
+    }
     var mermaidRender = renderMermaidBlocks(slideEl);
     enhanceCodeBlocks(slideEl);
     Promise.resolve(mermaidRender).then(function () {
@@ -1132,13 +1605,31 @@
     var trimmed = String(markdown || '').trim();
     if (!trimmed) return;
 
+    var hashToken = deckHashToken + 1;
+    deckHashToken = hashToken;
+    currentDeckContentHash = '';
+    currentDeckHashPending = true;
+
     slides = splitSlides(trimmed);
     currentSourceQuery = String(sourceQueryValue || '').trim();
-    currentSourceIsExplicit = Boolean(currentSourceQuery && sourceIsExplicit);
+    currentSourceIsExplicit = Boolean(
+      currentSourceQuery &&
+      sourceIsExplicit &&
+      getSourceProtocol(currentSourceQuery) !== LOCAL_DROP_SOURCE_PREFIX
+    );
     if (currentSourceIsExplicit) rememberSourceForFileName(currentSourceQuery);
     currentIndex = resolveInitialSlideIndex(currentSourceQuery, slides);
     sourceLabelEl.textContent = sourceLabel || '';
-    currentBaseUrl = baseUrl || window.location.href;
+    currentBaseUrl = typeof baseUrl === 'string' ? baseUrl : window.location.href;
+    hashMarkdownContent(trimmed).then(function (hash) {
+      if (hashToken !== deckHashToken) return;
+      currentDeckContentHash = hash;
+      return restorePersistedLocalAssetContext(hash, getCurrentDeckContextKey(), hashToken).then(function (restored) {
+        if (hashToken !== deckHashToken) return;
+        currentDeckHashPending = false;
+        if (!restored) updateView();
+      });
+    });
     updateView();
   }
 
@@ -1152,8 +1643,10 @@
   }
 
   function looksLikeLoadableSource(value) {
+    var normalized = String(value || '').trim();
+    if (normalized.indexOf(LOCAL_DROP_SOURCE_PREFIX) === 0) return true;
     try {
-      var parsed = new URL(value);
+      var parsed = new URL(normalized);
       return parsed.protocol === 'http:' || parsed.protocol === 'https:' || parsed.protocol === 'file:';
     } catch (_error) {
       return false;
@@ -1184,39 +1677,57 @@
 
   function inferDroppedFileSourceFromContext(fileName) {
     var normalizedName = String(fileName || '').trim();
-    if (!normalizedName) return '';
+    if (!normalizedName) return { source: '', strong: false };
 
     var candidates = [];
     var rememberedSource = getRememberedSourceForFileName(normalizedName);
     if (rememberedSource) {
-      pushUniqueCandidate(candidates, rememberedSource);
+      pushUniqueCandidate(candidates, JSON.stringify({ source: rememberedSource, strong: true }));
     }
 
     var querySource = stripSourceAnchor(getSourceFromQuery());
     var knownSources = [];
-    if (querySource && looksLikeLoadableSource(querySource)) {
-      pushUniqueCandidate(knownSources, querySource);
+    if (querySource && looksLikeLoadableSource(querySource) && getSourceProtocol(querySource) !== LOCAL_DROP_SOURCE_PREFIX) {
+      pushUniqueCandidate(knownSources, JSON.stringify({ source: querySource, strong: true }));
     }
     if (currentSourceIsExplicit) {
-      pushUniqueCandidate(knownSources, stripSourceAnchor(currentSourceQuery));
-      pushUniqueCandidate(knownSources, currentBaseUrl);
+      pushUniqueCandidate(knownSources, JSON.stringify({ source: stripSourceAnchor(currentSourceQuery), strong: true }));
+      pushUniqueCandidate(knownSources, JSON.stringify({ source: currentBaseUrl, strong: true }));
+    }
+    if (window.location.protocol === 'file:') {
+      pushUniqueCandidate(knownSources, JSON.stringify({ source: window.location.href, strong: false }));
     }
 
-    knownSources.forEach(function (base) {
-      if (!base) return;
+    knownSources.forEach(function (entryText) {
+      if (!entryText) return;
+      var entry;
       try {
-        pushUniqueCandidate(candidates, new URL(normalizedName, base).href);
+        entry = JSON.parse(entryText);
+      } catch (_parseError) {
+        return;
+      }
+      try {
+        pushUniqueCandidate(candidates, JSON.stringify({
+          source: new URL(normalizedName, entry.source).href,
+          strong: Boolean(entry.strong)
+        }));
       } catch (_error) {}
     });
 
     for (var index = 0; index < candidates.length; index += 1) {
-      if (looksLikeLoadableSource(candidates[index])) {
-        debugLog('getDroppedFileSource:inferred-from-context', candidates[index]);
-        return candidates[index];
+      var candidate;
+      try {
+        candidate = JSON.parse(candidates[index]);
+      } catch (_error) {
+        continue;
+      }
+      if (looksLikeLoadableSource(candidate.source)) {
+        debugLog('getDroppedFileSource:inferred-from-context', candidate);
+        return candidate;
       }
     }
 
-    return '';
+    return { source: '', strong: false };
   }
 
   function getDroppedFileSource(file, dt) {
@@ -1270,12 +1781,12 @@
     // the file lives next to index.html.
     if (file && typeof file.name === 'string' && file.name.trim()) {
       var inferredFromContext = inferDroppedFileSourceFromContext(file.name);
-      if (inferredFromContext) {
-        return { source: inferredFromContext, explicit: false };
+      if (inferredFromContext.source) {
+        return { source: inferredFromContext.source, explicit: false, strong: Boolean(inferredFromContext.strong) };
       }
     }
 
-    return { source: '', explicit: false };
+    return { source: '', explicit: false, strong: false };
   }
 
   async function loadFromSource(source) {
@@ -1294,6 +1805,15 @@
     var fetchSource = rewriteGitHubBlobToRaw(normalizedSource);
 
     var protocol = getSourceProtocol(fetchSource);
+
+    if (protocol === LOCAL_DROP_SOURCE_PREFIX) {
+      var cachedLocalDrop = getCachedLocalDropContent(fetchSource);
+      if (!cachedLocalDrop) {
+        throw new Error('Local dropped file is no longer cached in this browser.');
+      }
+      loadMarkdown(cachedLocalDrop, normalizedSource + ' (cached)', '', normalizedSource, true);
+      return;
+    }
 
     // Browsers block programmatic reads of file:// URLs on reload for security.
     if (protocol === 'file:') {
@@ -1362,15 +1882,38 @@
   }
 
   function resolveRelativeAssets(rootEl, baseUrl) {
-    if (!baseUrl) return;
-
     rootEl.querySelectorAll('img[src]').forEach(function (img) {
       var src = img.getAttribute('src') || '';
       if (!looksRelativePath(src)) return;
-      try {
-        img.setAttribute('src', new URL(src, baseUrl).href);
-      } catch (_error) {}
+
+      var resolvedLocalAsset = resolveLocalAssetUrl(src);
+      if (resolvedLocalAsset) {
+        img.setAttribute('src', resolvedLocalAsset);
+        var assetTone = resolveLocalAssetTone(src);
+        if (assetTone) {
+          img.dataset.localAssetTone = assetTone;
+        } else {
+          delete img.dataset.localAssetTone;
+        }
+        return;
+      }
+
+      if (baseUrl) {
+        try {
+          img.setAttribute('src', new URL(src, baseUrl).href);
+          return;
+        } catch (_error) {}
+      }
+
+      if (currentDeckHashPending && canPersistDirectoryHandles()) {
+        img.remove();
+        return;
+      }
+
+      img.replaceWith(createMissingAssetPlaceholder(src));
     });
+
+    if (!baseUrl) return;
 
     rootEl.querySelectorAll('a[href]').forEach(function (a) {
       var href = a.getAttribute('href') || '';
@@ -1428,10 +1971,11 @@
           name: file.name,
           size: file.size,
           fileSource: fileSource || '(none)',
-          explicit: Boolean(droppedSourceInfo.explicit)
+          explicit: Boolean(droppedSourceInfo.explicit),
+          strong: Boolean(droppedSourceInfo.strong)
         });
 
-        if (fileSource && looksLikeLoadableSource(fileSource)) {
+        if (fileSource && looksLikeLoadableSource(fileSource) && (droppedSourceInfo.explicit || droppedSourceInfo.strong)) {
           debugLog('handleDrop:file-loadable-source', fileSource);
           updateSourceQuery(fileSource);
           var droppedProtocol = '';
@@ -1442,6 +1986,9 @@
           if (droppedProtocol === 'file:') {
             var droppedFileText = await file.text();
             cacheFileSourceContent(fileSource, droppedFileText);
+            if (droppedSourceInfo.explicit) {
+              markVerifiedFileSource(fileSource);
+            }
             loadMarkdown(droppedFileText, fileSource, fileSource, fileSource, droppedSourceInfo.explicit);
           } else {
             await loadFromSource(fileSource);
@@ -1456,7 +2003,10 @@
             baseForFile = new URL('.', fileSource).href;
           } catch (_error) {}
         }
-        loadMarkdown(fileText, file.name || 'local file', baseForFile || window.location.href, fileSource || '', false);
+        var localDropSource = createLocalDropSource(file.name || 'local file');
+        cacheLocalDropContent(localDropSource, fileText);
+        updateSourceQuery(localDropSource);
+        loadMarkdown(fileText, file.name || 'local file', baseForFile || '', localDropSource, true);
         debugLog('handleDrop:file-loaded-as-text', { name: file.name, chars: fileText.length });
         return;
       }
@@ -1544,10 +2094,30 @@
   });
   if (sourceFromQuery && looksLikeLoadableSource(sourceFromQuery)) {
     var queryProtocol = getSourceProtocol(sourceFromQuery);
-    if (queryProtocol === 'file:') {
+    if (queryProtocol === LOCAL_DROP_SOURCE_PREFIX) {
+      var cachedLocalDropContent = getCachedLocalDropContent(sourceFromQuery);
+      if (cachedLocalDropContent) {
+        loadMarkdown(cachedLocalDropContent, sourceFromQuery + ' (cached)', '', sourceFromQuery, true);
+      } else {
+        loadMarkdown(
+          '# Load error\n\nCould not load cached local drop from URL query.\n\nDrop that file again in this browser.',
+          'error',
+          window.location.href,
+          '',
+          false
+        );
+      }
+    } else if (queryProtocol === 'file:') {
       var cachedFileContent = getCachedFileSourceContent(sourceFromQuery);
       if (cachedFileContent) {
-        loadMarkdown(cachedFileContent, sourceFromQuery + ' (cached)', sourceFromQuery, sourceFromQuery, true);
+        var verifiedFileSource = isVerifiedFileSource(sourceFromQuery);
+        loadMarkdown(
+          cachedFileContent,
+          sourceFromQuery + (verifiedFileSource ? ' (cached)' : ' (cached, unresolved path)'),
+          verifiedFileSource ? sourceFromQuery : '',
+          sourceFromQuery,
+          verifiedFileSource
+        );
       } else {
         loadMarkdown(
           '# Load error\n\nCould not load local file source from URL query.\n\nDrop that file once in this browser session to authorize and cache its content.',
