@@ -5,13 +5,22 @@
   var dropzone = document.getElementById('dropzone');
   var slideWrap = document.getElementById('slideWrap');
   var slideEl = document.getElementById('slide');
+  var printDeckEl = document.getElementById('printDeck');
   var pagerEl = document.getElementById('pager');
   var sourceLabelEl = document.getElementById('sourceLabel');
+  var brandHomeLinkEl = document.getElementById('brandHomeLink');
+  var fontDecreaseBtnEl = document.getElementById('fontDecreaseBtn');
+  var fontResetBtnEl = document.getElementById('fontResetBtn');
+  var fontIncreaseBtnEl = document.getElementById('fontIncreaseBtn');
+  var lightModeBtnEl = document.getElementById('lightModeBtn');
+  var darkModeBtnEl = document.getElementById('darkModeBtn');
 
   var slides = [];
   var currentIndex = 0;
   var touchStartX = 0;
   var touchStartY = 0;
+  var pointerDownX = 0;
+  var pointerDownY = 0;
   var dragDepth = 0;
   var currentBaseUrl = window.location.href;
   var currentSourceQuery = '';
@@ -20,6 +29,7 @@
   var markedReady = false;
   var mermaidRenderCount = 0;
   var viewRenderToken = 0;
+  var printRenderToken = 0;
   var FILE_SOURCE_CACHE_PREFIX = 'clicker.page.file-source-cache:v2:';
   var VERIFIED_FILE_SOURCE_PREFIX = 'clicker.page.verified-file-source:v2:';
   var FILE_NAME_SOURCE_CACHE_PREFIX = 'clicker.page.file-name-source-cache:v3:';
@@ -32,6 +42,9 @@
   var LOCAL_ASSET_DB_NAME = 'clicker.page.local-assets';
   var LOCAL_ASSET_DB_VERSION = 1;
   var LOCAL_ASSET_STORE = 'deck-contexts';
+  var UI_PREFS_STORAGE_KEY = 'clicker.page.ui-prefs:v1';
+  var contentScale = 1;
+  var currentTheme = 'light';
 
   function debugLog(message, details) {
     var stamp = new Date().toISOString();
@@ -40,6 +53,78 @@
       return;
     }
     console.log('[clicker.page]', stamp, message, details);
+  }
+
+  function clamp(number, min, max) {
+    return Math.max(min, Math.min(max, number));
+  }
+
+  function loadUiPreferences() {
+    try {
+      var raw = localStorage.getItem(UI_PREFS_STORAGE_KEY);
+      if (!raw) return;
+      var parsed = JSON.parse(raw);
+      if (typeof parsed.contentScale === 'number' && Number.isFinite(parsed.contentScale)) {
+        contentScale = clamp(parsed.contentScale, 0.75, 1.45);
+      }
+      if (parsed.theme === 'dark' || parsed.theme === 'light') {
+        currentTheme = parsed.theme;
+      }
+    } catch (_error) {}
+  }
+
+  function saveUiPreferences() {
+    try {
+      localStorage.setItem(UI_PREFS_STORAGE_KEY, JSON.stringify({
+        contentScale: contentScale,
+        theme: currentTheme
+      }));
+    } catch (_error) {}
+  }
+
+  function updateThemeButtons() {
+    if (lightModeBtnEl) lightModeBtnEl.classList.toggle('is-active', currentTheme === 'light');
+    if (darkModeBtnEl) darkModeBtnEl.classList.toggle('is-active', currentTheme === 'dark');
+  }
+
+  function applyUiPreferences() {
+    document.documentElement.style.setProperty('--content-scale', String(contentScale));
+    document.body.classList.toggle('theme-dark', currentTheme === 'dark');
+    document.body.classList.toggle('theme-light', currentTheme !== 'dark');
+    updateThemeButtons();
+  }
+
+  function setTheme(theme) {
+    if (theme !== 'dark' && theme !== 'light') return;
+    if (currentTheme === theme) return;
+    currentTheme = theme;
+    applyUiPreferences();
+    saveUiPreferences();
+  }
+
+  function adjustContentScale(delta) {
+    var nextScale = clamp(Math.round((contentScale + delta) * 100) / 100, 0.75, 1.45);
+    if (nextScale === contentScale) return;
+    contentScale = nextScale;
+    applyUiPreferences();
+    saveUiPreferences();
+    updateView();
+    rebuildPrintDeck();
+  }
+
+  function resetContentScale() {
+    if (contentScale === 1) return;
+    contentScale = 1;
+    applyUiPreferences();
+    saveUiPreferences();
+    updateView();
+    rebuildPrintDeck();
+  }
+
+  function isEditableTarget(target) {
+    if (!(target instanceof Element)) return false;
+    if (target.closest('input, textarea, select')) return true;
+    return Boolean(target.closest('[contenteditable], [contenteditable="true"], [contenteditable="plaintext-only"]'));
   }
 
   window.addEventListener('error', function (event) {
@@ -55,6 +140,9 @@
     var reason = event && typeof event.reason !== 'undefined' ? event.reason : '(no reason)';
     debugLog('window.unhandledrejection', reason);
   });
+
+  loadUiPreferences();
+  applyUiPreferences();
 
   function ensureMarked() {
     if (!(window.marked && typeof window.marked.parse === 'function')) return false;
@@ -262,6 +350,7 @@
     }
 
     localAssetContexts[normalizedDeckKey] = context;
+    rebuildPrintDeck();
   }
 
   function clearLocalAssetContext(deckKey) {
@@ -276,6 +365,7 @@
       });
     }
     delete localAssetContexts[normalizedDeckKey];
+    rebuildPrintDeck();
   }
 
   async function createLocalAssetContext(entries) {
@@ -1303,12 +1393,13 @@
     }
   }
 
-  async function applySlideLayout(rootEl, renderToken) {
+  async function applySlideLayout(rootEl, renderToken, slideIndex, options) {
+    var settings = options || {};
     rootEl.classList.remove('slide--split');
     rootEl.classList.remove('slide--intro-qr');
     rootEl.classList.remove('slide--image-hero');
 
-    if (currentIndex === 0 && !isLikelyMobileClient()) {
+    if (slideIndex === 0 && settings.allowIntroQr !== false && !isLikelyMobileClient()) {
       applyFirstSlideQrLayout(rootEl);
       return;
     }
@@ -1373,11 +1464,83 @@
     rootEl.classList.add('slide--split');
   }
 
+  function mountRenderedContent(targetEl, renderedRoot) {
+    targetEl.innerHTML = '';
+    while (renderedRoot.firstChild) {
+      targetEl.appendChild(renderedRoot.firstChild);
+    }
+  }
+
+  function renderSlideInto(targetEl, slideMarkdown, slideIndex, renderToken, options) {
+    var settings = options || {};
+    var renderedTemplate = document.createElement('template');
+    renderedTemplate.innerHTML = renderMarkdown(slideMarkdown);
+    resolveRelativeAssets(renderedTemplate.content, settings.baseUrl);
+    mountRenderedContent(targetEl, renderedTemplate.content);
+    var mermaidRender = renderMermaidBlocks(targetEl);
+    enhanceCodeBlocks(targetEl);
+    return Promise.resolve(mermaidRender).then(function () {
+      applyChainEffects(targetEl);
+      return applySlideLayout(targetEl, renderToken, slideIndex, settings);
+    }).then(function () {
+      fitCodeBlocks(targetEl);
+      if (settings.animateMarkers === false) return;
+      animateMarkerHighlights(targetEl, renderToken);
+    });
+  }
+
   function enhanceCodeBlocks(rootEl) {
     rootEl.querySelectorAll('pre > code').forEach(function (codeEl) {
       var pre = codeEl.parentElement;
       if (!pre || pre.querySelector('.copy-code-btn')) return;
-      pre.appendChild(createCopyButton(function () { return codeEl.textContent || ''; }));
+
+      var source = codeEl.textContent || '';
+      var lines = source.replace(/\r\n/g, '\n').split('\n');
+      if (lines.length && lines[lines.length - 1] === '') {
+        lines.pop();
+      }
+      if (!lines.length) lines = [''];
+
+      var codeTable = document.createElement('div');
+      codeTable.className = 'code-table';
+
+      lines.forEach(function (lineText, index) {
+        var row = document.createElement('div');
+        row.className = 'code-row';
+
+        var lineNo = document.createElement('span');
+        lineNo.className = 'code-line-no';
+        lineNo.textContent = String(index + 1);
+
+        var lineCode = document.createElement('span');
+        lineCode.className = 'code-line-text';
+        lineCode.textContent = lineText || ' ';
+
+        row.appendChild(lineNo);
+        row.appendChild(lineCode);
+        codeTable.appendChild(row);
+      });
+
+      codeEl.replaceWith(codeTable);
+      pre.appendChild(createCopyButton(function () { return source; }));
+    });
+  }
+
+  function fitCodeBlocks(rootEl) {
+    if (!rootEl) return;
+
+    rootEl.querySelectorAll('pre').forEach(function (pre) {
+      var codeTable = pre.querySelector('.code-table');
+      if (!codeTable) return;
+      if (!pre.clientWidth) return;
+
+      codeTable.style.fontSize = '';
+
+      var availableWidth = Math.max(1, pre.clientWidth - 12);
+      var requiredWidth = Math.max(1, codeTable.scrollWidth);
+      if (requiredWidth <= availableWidth) return;
+
+      codeTable.style.fontSize = String(clamp(availableWidth / requiredWidth, 0.52, 1) * 100) + '%';
     });
   }
 
@@ -1507,6 +1670,17 @@
     }
   }
 
+  function updateHeaderSourceLabel() {
+    var visibleSource = stripSourceAnchor(currentSourceQuery || getSourceFromQuery() || '');
+    sourceLabelEl.textContent = visibleSource ? '?source=' + visibleSource : '';
+    sourceLabelEl.setAttribute('href', visibleSource || '');
+    if (visibleSource) {
+      sourceLabelEl.removeAttribute('aria-hidden');
+    } else {
+      sourceLabelEl.setAttribute('aria-hidden', 'true');
+    }
+  }
+
   function updateSourceQuery(source) {
     var normalized = String(source || '').trim();
     if (!normalized) return;
@@ -1544,6 +1718,8 @@
         window.location.replace(nextHref);
       } catch (_replaceError) {}
     }
+
+    updateHeaderSourceLabel();
   }
 
   function updateView() {
@@ -1560,22 +1736,12 @@
     viewRenderToken = renderToken;
     currentIndex = Math.max(0, Math.min(currentIndex, total - 1));
     syncCurrentSlideSourceQuery();
-    var renderedTemplate = document.createElement('template');
-    renderedTemplate.innerHTML = renderMarkdown(slides[currentIndex]);
-    resolveRelativeAssets(renderedTemplate.content, currentBaseUrl);
-    slideEl.innerHTML = '';
-    while (renderedTemplate.content.firstChild) {
-      slideEl.appendChild(renderedTemplate.content.firstChild);
-    }
-    var mermaidRender = renderMermaidBlocks(slideEl);
-    enhanceCodeBlocks(slideEl);
-    Promise.resolve(mermaidRender).then(function () {
-      if (renderToken !== viewRenderToken) return;
-      applyChainEffects(slideEl);
-      return applySlideLayout(slideEl, renderToken);
+    renderSlideInto(slideEl, slides[currentIndex], currentIndex, renderToken, {
+      allowIntroQr: true,
+      animateMarkers: true,
+      baseUrl: currentBaseUrl
     }).then(function () {
       if (renderToken !== viewRenderToken) return;
-      animateMarkerHighlights(slideEl, renderToken);
     }).catch(function (error) {
       debugLog('updateView:slide-layout-failed', String(error));
     });
@@ -1601,6 +1767,33 @@
     }
   }
 
+  function rebuildPrintDeck() {
+    if (!printDeckEl) return Promise.resolve();
+
+    var renderToken = printRenderToken + 1;
+    printRenderToken = renderToken;
+    printDeckEl.innerHTML = '';
+
+    if (!slides.length) return Promise.resolve();
+
+    var fragment = document.createDocumentFragment();
+    var renderTasks = slides.map(function (slideMarkdown, slideIndex) {
+      var printSlide = document.createElement('article');
+      printSlide.className = 'slide print-slide';
+      fragment.appendChild(printSlide);
+      return renderSlideInto(printSlide, slideMarkdown, slideIndex, renderToken, {
+        allowIntroQr: false,
+        animateMarkers: false,
+        baseUrl: currentBaseUrl
+      });
+    });
+
+    printDeckEl.appendChild(fragment);
+    return Promise.all(renderTasks).catch(function (error) {
+      debugLog('rebuildPrintDeck:failed', String(error));
+    });
+  }
+
   function loadMarkdown(markdown, sourceLabel, baseUrl, sourceQueryValue, sourceIsExplicit) {
     var trimmed = String(markdown || '').trim();
     if (!trimmed) return;
@@ -1619,8 +1812,8 @@
     );
     if (currentSourceIsExplicit) rememberSourceForFileName(currentSourceQuery);
     currentIndex = resolveInitialSlideIndex(currentSourceQuery, slides);
-    sourceLabelEl.textContent = sourceLabel || '';
     currentBaseUrl = typeof baseUrl === 'string' ? baseUrl : window.location.href;
+    updateHeaderSourceLabel();
     hashMarkdownContent(trimmed).then(function (hash) {
       if (hashToken !== deckHashToken) return;
       currentDeckContentHash = hash;
@@ -1631,6 +1824,7 @@
       });
     });
     updateView();
+    rebuildPrintDeck();
   }
 
   function looksLikeUrl(value) {
@@ -2040,6 +2234,30 @@
 
   window.addEventListener('keydown', function (event) {
     if (!slides.length) return;
+    if (isEditableTarget(event.target)) return;
+
+    var isPlusShortcut =
+      event.key === '+' ||
+      event.code === 'NumpadAdd' ||
+      (event.code === 'Equal' && event.shiftKey);
+
+    var isMinusShortcut =
+      event.key === '-' ||
+      event.key === '_' ||
+      event.code === 'NumpadSubtract' ||
+      event.code === 'Minus';
+
+    if (isPlusShortcut) {
+      event.preventDefault();
+      adjustContentScale(0.08);
+      return;
+    }
+
+    if (isMinusShortcut) {
+      event.preventDefault();
+      adjustContentScale(-0.08);
+      return;
+    }
 
     if (event.key === 'ArrowDown' || event.key === 'ArrowRight' || event.key === 'PageDown' || event.key === ' ') {
       event.preventDefault();
@@ -2077,15 +2295,56 @@
     }
   }, { passive: true });
 
-  app.addEventListener('click', function (event) {
+  app.addEventListener('mousedown', function (event) {
+    if (event.button !== 0) return;
+    pointerDownX = event.clientX;
+    pointerDownY = event.clientY;
+  });
+
+  app.addEventListener('mouseup', function (event) {
     if (!slides.length) return;
+    if (event.button !== 0) return;
 
     var target = event.target;
     if (!(target instanceof Element)) return;
     if (target.closest('a, button, input, textarea, select, label')) return;
+    if (Math.abs(event.clientX - pointerDownX) > 6 || Math.abs(event.clientY - pointerDownY) > 6) return;
+
+    var selection = window.getSelection ? window.getSelection() : null;
+    if (selection && String(selection).trim()) return;
 
     goNext();
   });
+
+  if (fontDecreaseBtnEl) {
+    fontDecreaseBtnEl.addEventListener('click', function () {
+      adjustContentScale(-0.08);
+    });
+  }
+
+  if (fontIncreaseBtnEl) {
+    fontIncreaseBtnEl.addEventListener('click', function () {
+      adjustContentScale(0.08);
+    });
+  }
+
+  if (fontResetBtnEl) {
+    fontResetBtnEl.addEventListener('click', function () {
+      resetContentScale();
+    });
+  }
+
+  if (lightModeBtnEl) {
+    lightModeBtnEl.addEventListener('click', function () {
+      setTheme('light');
+    });
+  }
+
+  if (darkModeBtnEl) {
+    darkModeBtnEl.addEventListener('click', function () {
+      setTheme('dark');
+    });
+  }
 
   var sourceFromQuery = getSourceFromQuery();
   debugLog('startup', {
