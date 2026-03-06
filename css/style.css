@@ -1058,6 +1058,41 @@ body.theme-dark .slide .code-row:nth-child(even) {
   outline: none;
 }
 
+.slide .bootstrap-screen {
+  max-width: 34rem;
+}
+
+.slide .bootstrap-screen__body p:last-child {
+  margin-bottom: 0;
+}
+
+.slide .bootstrap-screen__actions {
+  margin-top: 1.2rem;
+}
+
+.slide .bootstrap-action-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 2.4rem;
+  padding: 0.45rem 0.9rem;
+  border: 1px solid rgba(17, 24, 39, 0.22);
+  border-radius: 0.55rem;
+  background: rgba(255, 255, 255, 0.72);
+  color: inherit;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 140ms ease, background-color 140ms ease, color 140ms ease;
+}
+
+.slide .bootstrap-action-btn:hover,
+.slide .bootstrap-action-btn:focus-visible {
+  border-color: currentColor;
+  background: rgba(255, 255, 255, 0.9);
+  outline: none;
+}
+
 .slide .chain-warp {
   position: relative;
   display: inline-block;

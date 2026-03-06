@@ -741,6 +741,77 @@
     return Boolean(isLocalAppMode() && window.showOpenFilePicker);
   }
 
+  function renderBootstrapScreen(title, bodyHtml, actionsHtml) {
+    slides = [];
+    slideRevealProgress = {};
+    currentIndex = 0;
+    currentSourceQuery = '';
+    currentSourceIsExplicit = false;
+    currentBaseUrl = '';
+    currentDeckContentHash = '';
+    currentDeckHashPending = false;
+    updateHeaderSourceLabel();
+    slideEl.innerHTML =
+      '<section class="bootstrap-screen">' +
+        '<h2>' + String(title || '') + '</h2>' +
+        '<div class="bootstrap-screen__body">' + String(bodyHtml || '') + '</div>' +
+        (actionsHtml ? '<div class="bootstrap-screen__actions">' + actionsHtml + '</div>' : '') +
+      '</section>';
+    dropzone.style.display = 'none';
+    slideWrap.style.display = 'block';
+    pagerEl.textContent = '';
+    pagerEl.style.display = 'none';
+    if (printDeckEl) printDeckEl.innerHTML = '';
+  }
+
+  async function promptForDefaultReadmeAccess(readmeSource) {
+    if (!window.showOpenFilePicker) return;
+
+    try {
+      var handles = await window.showOpenFilePicker({
+        multiple: false,
+        excludeAcceptAllOption: false,
+        types: [{
+          description: 'Markdown files',
+          accept: {
+            'text/markdown': ['.md', '.markdown', '.mdown', '.mkd']
+          }
+        }]
+      });
+      var handle = handles && handles[0];
+      if (!handle) return;
+
+      var file = await handle.getFile();
+      var text = await file.text();
+      cacheFileSourceContent(readmeSource, text);
+      markVerifiedFileSource(readmeSource);
+      loadMarkdown(text, readmeSource, readmeSource, readmeSource, true);
+    } catch (error) {
+      if (error && error.name === 'AbortError') return;
+      debugLog('defaultReadme:pick-failed', String(error));
+    }
+  }
+
+  function showDefaultReadmeBootstrap(readmeSource) {
+    var buttonHtml = window.showOpenFilePicker
+      ? '<button class="bootstrap-action-btn" id="openDefaultReadmeBtn" type="button">Open README.md</button>'
+      : '';
+
+    renderBootstrapScreen(
+      'Open README.md',
+      '<p>The default deck lives in <code>README.md</code>.</p>' +
+      '<p>This browser blocks automatic local <code>file://</code> reads, so one explicit action is required.</p>',
+      buttonHtml
+    );
+
+    var openBtn = document.getElementById('openDefaultReadmeBtn');
+    if (openBtn) {
+      openBtn.addEventListener('click', function () {
+        promptForDefaultReadmeAccess(readmeSource);
+      });
+    }
+  }
+
   function updateDevWatchAvailability() {
     if (!devWatchGroupEl) return;
     var enabled = canUseLocalWatch();
@@ -2357,6 +2428,31 @@
     loadMarkdown(text, normalizedSource, fetchSource, normalizedSource, true);
   }
 
+  async function loadDefaultDeck() {
+    var readmeSource = new URL('./README.md', window.location.href).href;
+    debugLog('loadDefaultDeck:start', { source: readmeSource });
+
+    if (window.location.protocol === 'file:') {
+      var cachedReadme = getCachedFileSourceContent(readmeSource);
+      if (cachedReadme) {
+        var verifiedReadme = isVerifiedFileSource(readmeSource);
+        loadMarkdown(
+          cachedReadme,
+          readmeSource + (verifiedReadme ? ' (cached)' : ' (cached, unresolved path)'),
+          verifiedReadme ? readmeSource : '',
+          readmeSource,
+          verifiedReadme
+        );
+        return;
+      }
+
+      showDefaultReadmeBootstrap(readmeSource);
+      return;
+    }
+
+    await loadFromSource(readmeSource);
+  }
+
   function normalizeDroppedUri(uriText) {
     return uriText
       .split('\n')
@@ -2556,6 +2652,7 @@
     }
   }
 
+  document.addEventListener('drop', handleDrop, true);
   window.addEventListener('drop', handleDrop, true);
 
   window.addEventListener('keydown', function (event) {
@@ -2725,12 +2822,9 @@
       });
     }
   } else {
-    loadMarkdown(
-      '# clicker.page\n\nDrop a markdown file or URL onto this page.\n\n---\n\n## Navigation\n\n- Arrow right/down: next slide\n- Arrow left/up: previous slide\n- Swipe: next/previous on mobile',
-      'welcome',
-      window.location.href,
-      '',
-      false
-    );
+    loadDefaultDeck().catch(function (error) {
+      var message = error instanceof Error ? error.message : String(error);
+      loadMarkdown('# Load error\n\nCould not load `README.md` as the default deck.\n\n`' + message + '`', 'error', window.location.href, '', false);
+    });
   }
 })();

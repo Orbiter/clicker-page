@@ -1,167 +1,126 @@
-# clicker-page
+# clicker.page
 
-Turn any Markdown document into a clickable, keyboard-driven slide deck.
+clicker.page turns Markdown into beautiful presentations.
 
----
-
-## The Problem
-
-Great project READMEs are often already great presentations.
-
-But teams still rebuild the same content in separate slide tools.
-
-That duplication costs time, creates drift, and weakens documentation.
+Throw a Markdown file or a link to a Markdown file onto it.
 
 ---
 
-## The Idea
+## Start Here
 
-`clicker-page` is a single web page that renders Markdown as slides.
+- `ArrowRight` / `ArrowDown`: next slide
+- `ArrowLeft` / `ArrowUp`: previous slide
+- click or swipe: navigate
+- `+` / `-`: content font size
+- `☀` / `☾`: light or dark mode
+- theme buttons: switch visual language
 
-Use one source of truth.
-
-Write once.
-
-Present anywhere.
-
----
-
-## Input Sources
-
-The page can load Markdown in two ways:
-
-1. **Drag and drop** a local `.md` file onto the browser window.
-2. **Load from URL** (for example raw GitHub content URLs).
-
-Because raw GitHub content endpoints provide CORS headers, the page can fetch those files directly in the browser.
+The source URL stays visible in the header and can be copied or opened directly.
 
 ---
 
-## Slide Model
+## Markdown Becomes Layout
 
-A Markdown file is split into pages using natural authoring markers:
+Slides are split by natural authoring markers:
 
-- Horizontal rules (`---`)
-- `#` headlines
-- `##` headlines
+- `#` and `##` headlines
+- horizontal rules `---`
 
-This keeps authoring simple and readable in plain text.
-
----
-
-## Navigation
-
-Presentation flow is keyboard-first:
-
-- `ArrowDown` / `ArrowRight`: next page
-- `ArrowUp` / `ArrowLeft`: previous page
-
-No export step.
-No proprietary format.
-No lock-in.
+Markdown then becomes a styled presentation surface with post-render layout rules.
 
 ---
 
-## Why This Matters
+## Images Can Drive The Slide
 
-A strong README should be enough to:
+![Portrait left example](./examples/portrait-left.svg)
 
-- explain a project,
-- onboard contributors,
-- and present the idea to stakeholders.
+Portrait images can trigger split-screen layouts.
 
-With `clicker-page`, documentation and presentation become the same artifact.
-
----
-
-## Authoring Philosophy
-
-Write Markdown for humans first.
-
-Keep hierarchy clear.
-
-Use meaningful headings.
-
-Insert horizontal rules where narrative breaks matter.
-
-If it reads well in a repository, it should present well on a screen.
+- image first: image on the left
+- image last: image on the right
+- full slide stays Markdown-driven, not Mermaid-driven
 
 ---
 
-## Example Source URL
+## Landscape Images Can Become Hero Slides
 
-You can load Markdown from URLs such as:
+![Landscape light example](./examples/landscape-light.svg)
 
-`https://raw.githubusercontent.com/<owner>/<repo>/<branch>/README.md`
+If a slide is only a headline plus one landscape image, it becomes a full-image hero slide.
 
-This makes any public repository instantly presentable.
-
----
-
-## Showcase Pages
-
-These are standalone markdown files you can drop directly into `clicker-page`:
-
-1. [Aurora Launch Story](./showcases/aurora-launch-story.md)  
-   Product narrative with blockquote, metrics table, and code snippet.
-2. [Oceanic Design Manifesto](./showcases/oceanic-design-manifesto.md)  
-   Clean typography-focused deck with principles and color system.
-3. [Alpine Travel Brief](./showcases/alpine-travel-brief.md)  
-   Visual travel story with itinerary, remote image, and concise structure.
+- headline is painted over the image
+- color is adapted to the visible image region
+- great for title slides and section dividers
 
 ---
 
-## Project Goals
+## Text Can Be Enhanced
 
-- One-page app
-- Fast startup
-- Zero build friction for end users
-- URL + drag-and-drop input
-- Clean slide navigation from Markdown structure
+Markdown emphasis and semantic patterns are styled after rendering:
 
----
+- `**bold**` becomes marker-like emphasis
+- chains like intake -> refine -> deliver get a warp effect
+- `inline code` gets theme-aware chip styling
 
-## Non-Goals (for now)
-
-- Heavy slide design tooling
-- Complex animation systems
-- Proprietary presentation syntax
-
-The priority is clarity, portability, and reusability.
+The pipeline lights up when a sentence contains a chain like intake -> refine -> deliver, and `updateSourceQuery(...)` stays readable inside running prose.
 
 ---
 
-## Who This Is For
+## Code Blocks Become Presentation Elements
 
-- Open source maintainers
-- Developer advocates
-- Engineering teams
-- Technical founders
-- Anyone who already writes Markdown and presents ideas
+```js
+function renderSlideInto(targetEl, slideMarkdown, slideIndex, renderToken, options) {
+  const renderedTemplate = document.createElement('template');
+  renderedTemplate.innerHTML = renderMarkdown(slideMarkdown);
+  mountRenderedContent(targetEl, renderedTemplate.content);
+}
+```
 
----
-
-## Vision
-
-README-first communication.
-
-When project docs are written well, they become:
-
-- your docs,
-- your pitch,
-- your onboarding,
-- your slides.
-
-`clicker-page` is the thin layer that unlocks that workflow.
+- line numbers
+- themed code surfaces
+- copy button
+- automatic width fitting
 
 ---
 
-## Summary
+## Tables Are Styled, Too
 
-`clicker-page` treats Markdown as a presentation-native format.
+| Feature | Result | Q1 | Q2 |
+| --- | --- | ---: | ---: |
+| header bands | stronger structure | 12 | 18 |
+| row rhythm | easier scanning | 24 | 31 |
+| image-only tables | borderless stitched gallery | 4 | 6 |
 
-Drop a file or provide a URL.
+|  |  |
+| --- | --- |
+| ![Portrait left](./examples/portrait-left.svg) | ![Portrait right](./examples/portrait-right.svg) |
+| ![Landscape dark](./examples/landscape-dark.svg) | ![Landscape light](./examples/landscape-light.svg) |
 
-Navigate with arrow keys.
+---
 
-Present directly from the same content you maintain in version control.
+## Bullet Lists Can Reveal Progressively
+
+- first bullet is visible immediately
+- next bullets appear step by step
+- nested content belongs to its parent bullet
+- code blocks can live inside a revealed bullet
+- tables and image sets can live inside a revealed bullet
+
+---
+
+## Local And Remote Markdown Both Work
+
+- drop a local `.md` file
+- drop a markdown URL
+- keep the current source in the URL
+- reload directly into the same deck
+- optionally watch a local source file in local dev mode
+
+This makes `README.md` files, notes, docs, and demos presentation-ready without a second slide tool.
+
+---
+## One Source Of Truth
+
+This `README.md` is the default clicker.page presentation.
+
+The example decks still exist for focused testing, but the main product story now lives here.

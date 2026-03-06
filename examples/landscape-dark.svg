@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" role="img" aria-labelledby="title desc">
+  <title id="title">Dark landscape demo</title>
+  <desc id="desc">Dark wide artwork for full image slide testing.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#06111f" />
+      <stop offset="55%" stop-color="#173454" />
+      <stop offset="100%" stop-color="#051019" />
+    </linearGradient>
+    <radialGradient id="glow" cx="72%" cy="28%" r="42%">
+      <stop offset="0%" stop-color="#8fd9ff" stop-opacity="0.95" />
+      <stop offset="100%" stop-color="#8fd9ff" stop-opacity="0" />
+    </radialGradient>
+  </defs>
+  <rect width="1600" height="900" fill="url(#bg)" />
+  <rect width="1600" height="900" fill="url(#glow)" opacity="0.52" />
+  <path d="M0 720 C180 660, 320 650, 460 700 S760 810, 920 760 S1220 640, 1600 760 L1600 900 L0 900 Z" fill="#0b2238" />
+  <path d="M0 770 C220 700, 420 720, 640 790 S1060 860, 1240 790 S1450 720, 1600 780 L1600 900 L0 900 Z" fill="#081728" opacity="0.9" />
+  <circle cx="1190" cy="220" r="94" fill="#dff8ff" opacity="0.82" />
+</svg>

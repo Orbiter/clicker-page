@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 1200" role="img" aria-labelledby="title desc">
+  <title id="title">Portrait split demo right</title>
+  <desc id="desc">A tall sample card for testing right-side split layout.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#e9f5df" />
+      <stop offset="100%" stop-color="#f6dfde" />
+    </linearGradient>
+  </defs>
+  <rect width="800" height="1200" fill="url(#bg)" rx="48" />
+  <rect x="70" y="70" width="660" height="1060" rx="36" fill="#fffefb" stroke="#111111" stroke-width="8" />
+  <text x="110" y="180" font-family="Georgia, serif" font-size="56" fill="#111111">Portrait</text>
+  <text x="110" y="250" font-family="Georgia, serif" font-size="56" fill="#111111">Image Last</text>
+  <text x="110" y="340" font-family="Arial, sans-serif" font-size="28" fill="#555555">Expected layout:</text>
+  <text x="110" y="390" font-family="Arial, sans-serif" font-size="28" fill="#555555">Markdown on the left</text>
+  <text x="110" y="440" font-family="Arial, sans-serif" font-size="28" fill="#555555">image on the right</text>
+  <rect x="180" y="570" width="440" height="280" rx="28" fill="#a33a2b" opacity="0.15" />
+  <path d="M220 780 H580" stroke="#111111" stroke-width="20" stroke-linecap="round" />
+  <path d="M320 660 H480" stroke="#a33a2b" stroke-width="20" stroke-linecap="round" />
+  <path d="M320 720 H480" stroke="#a33a2b" stroke-width="20" stroke-linecap="round" />
+  <text x="400" y="1020" text-anchor="middle" font-family="Arial, sans-serif" font-size="34" fill="#111111">800 x 1200 SVG</text>
+</svg>
