@@ -1116,6 +1116,12 @@
     }
 
     function renderMermaidDiagram(renderId, source, graph) {
+      function normalizeMermaidSource(input) {
+        return String(input || '')
+          .replace(/→|⇒|⟶/g, '->')
+          .replace(/\r\n/g, '\n');
+      }
+
       return new Promise(function (resolve) {
         var settled = false;
         function setRendered(result) {
@@ -1137,27 +1143,37 @@
           resolve();
         }
 
-        try {
-          var maybeResult = window.mermaid.render(renderId, source, function (svg) {
-            setRendered(svg);
-          });
+        function attemptRender(sourceText, allowRetry) {
+          try {
+            var maybeResult = window.mermaid.render(renderId, sourceText);
 
-          if (maybeResult && typeof maybeResult.then === 'function') {
-            maybeResult.then(function (result) {
-              setRendered(result);
-            }).catch(function () {
+            if (maybeResult && typeof maybeResult.then === 'function') {
+              maybeResult.then(function (result) {
+                setRendered(result);
+              }).catch(function () {
+                if (allowRetry) {
+                  attemptRender(normalizeMermaidSource(source), false);
+                } else {
+                  setRendered(null);
+                }
+              });
+            } else if (typeof maybeResult !== 'undefined') {
+              setRendered(maybeResult);
+            } else {
+              window.setTimeout(function () {
+                if (!settled) setRendered(null);
+              }, 800);
+            }
+          } catch (_error) {
+            if (allowRetry) {
+              attemptRender(normalizeMermaidSource(source), false);
+            } else {
               setRendered(null);
-            });
-          } else if (typeof maybeResult !== 'undefined') {
-            setRendered(maybeResult);
-          } else {
-            window.setTimeout(function () {
-              if (!settled) setRendered(null);
-            }, 800);
+            }
           }
-        } catch (_error) {
-          setRendered(null);
         }
+
+        attemptRender(source, true);
       });
     }
 
@@ -1186,10 +1202,10 @@
 
     var queue = Promise.resolve();
     diagramsToRender.forEach(function (entry) {
-      var renderId = 'mermaid-diagram-' + String(mermaidRenderCount);
+      var nextRenderId = 'mermaid-diagram-' + String(mermaidRenderCount);
       mermaidRenderCount += 1;
       queue = queue.then(function () {
-        return renderMermaidDiagram(renderId, entry.source, entry.graph);
+        return renderMermaidDiagram(nextRenderId, entry.source, entry.graph);
       });
     });
     return queue;
@@ -1381,6 +1397,28 @@
 
     var onlyChild = elementChildren[0];
     if (onlyChild.tagName && onlyChild.tagName.toUpperCase() === 'IMG') return onlyChild;
+    return null;
+  }
+
+  function getLeadSplitMedia(containerEl) {
+    var imageEl = getLeadImageElement(containerEl);
+    if (imageEl) {
+      return {
+        kind: 'image',
+        element: imageEl,
+        host: imageEl.parentElement === containerEl ? containerEl : imageEl
+      };
+    }
+
+    if (!containerEl) return null;
+    if (containerEl.classList && containerEl.classList.contains('mermaid-block')) {
+      return {
+        kind: 'mermaid',
+        element: containerEl,
+        host: containerEl
+      };
+    }
+
     return null;
   }
 
@@ -1789,26 +1827,28 @@
     }
 
     var leadingElement = getFirstMeaningfulElement(rootEl);
-    var leadImage = getLeadImageElement(leadingElement);
+    var leadMedia = getLeadSplitMedia(leadingElement);
     var trailingElement = getLastMeaningfulElement(rootEl);
-    var tailImage = getLeadImageElement(trailingElement);
+    var tailMedia = getLeadSplitMedia(trailingElement);
     var splitSide = '';
-    var splitImage = null;
+    var splitMedia = null;
 
-    if (leadImage) {
+    if (leadMedia) {
       splitSide = 'left';
-      splitImage = leadImage;
-    } else if (tailImage) {
+      splitMedia = leadMedia;
+    } else if (tailMedia) {
       splitSide = 'right';
-      splitImage = tailImage;
+      splitMedia = tailMedia;
     } else {
       return;
     }
 
-    var loaded = await waitForImageLoad(splitImage);
-    if (!loaded || renderToken !== viewRenderToken) return;
+    if (splitMedia.kind === 'image') {
+      var loaded = await waitForImageLoad(splitMedia.element);
+      if (!loaded || renderToken !== viewRenderToken) return;
+    }
 
-    var mediaHost = splitImage.parentElement === rootEl ? splitImage : splitImage.parentElement;
+    var mediaHost = splitMedia.host;
     var splitLayout = document.createElement('div');
     splitLayout.className = 'slide-split-layout';
 

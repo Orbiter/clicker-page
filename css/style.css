@@ -854,31 +854,47 @@ body.theme-dark .slide .code-row:nth-child(even) {
   display: inline;
   font-weight: inherit;
   color: inherit;
-  padding: 0.04em 0.12em 0.02em;
+  padding: 0.08em 0.14em 0.04em;
   -webkit-box-decoration-break: clone;
   box-decoration-break: clone;
   background-repeat: no-repeat, no-repeat;
   background-image:
-    linear-gradient(180deg, rgba(177, 234, 103, 0.92) 0%, rgba(133, 210, 54, 0.88) 100%),
-    linear-gradient(180deg, rgba(196, 243, 126, 0.72) 0%, rgba(142, 218, 67, 0.82) 100%);
+    linear-gradient(177deg, transparent 0.04em, rgba(177, 234, 103, 0.9) 0.18em, rgba(133, 210, 54, 0.9) calc(100% - 0.12em), transparent 100%),
+    linear-gradient(183deg, transparent 0.08em, rgba(196, 243, 126, 0.66) 0.2em, rgba(142, 218, 67, 0.8) calc(100% - 0.08em), transparent 100%);
   background-position:
-    left 0.78em,
-    left calc(100% - 0.02em);
+    left 0.58em,
+    left 0.72em;
   background-size:
-    0% 0.9em,
-    0% 0.72em;
-  border-radius: 0.3em 0.18em 0.26em 0.14em;
+    0% 1.12em,
+    0% 0.92em;
+  border-radius: 0.34em 0.2em 0.3em 0.16em;
   z-index: 0;
 }
 
 .slide .md-strong-marker:nth-of-type(odd) {
-  border-radius: 0.18em 0.32em 0.14em 0.28em;
+  background-position:
+    left 0.54em,
+    left 0.7em;
+  border-radius: 0.2em 0.36em 0.16em 0.3em;
+}
+
+.slide .md-strong-marker:nth-of-type(even) {
+  background-position:
+    left 0.62em,
+    left 0.76em;
+  border-radius: 0.38em 0.18em 0.28em 0.2em;
 }
 
 .slide .md-strong-marker.md-strong-marker--drawn {
   animation:
     marker-stroke-fill-primary 420ms cubic-bezier(0.22, 0.8, 0.24, 1) var(--marker-delay, 0ms) forwards,
     marker-stroke-fill-secondary 360ms cubic-bezier(0.22, 0.8, 0.24, 1) calc(var(--marker-delay, 0ms) + 160ms) forwards;
+}
+
+body.theme-dark .slide .md-strong-marker {
+  background-image:
+    linear-gradient(177deg, transparent 0.04em, rgba(76, 128, 28, 0.95) 0.18em, rgba(50, 92, 15, 0.94) calc(100% - 0.12em), transparent 100%),
+    linear-gradient(183deg, transparent 0.08em, rgba(92, 146, 37, 0.74) 0.2em, rgba(63, 108, 21, 0.86) calc(100% - 0.08em), transparent 100%);
 }
 
 .slide blockquote {
@@ -1010,7 +1026,7 @@ body.theme-dark .slide .code-row:nth-child(even) {
 .slide td {
   border: 0;
   padding: 12px 14px;
-  vertical-align: middle;
+  vertical-align: top;
 }
 
 .slide th.table-align-left,
@@ -1036,6 +1052,14 @@ body.theme-dark .slide .code-row:nth-child(even) {
 .slide img {
   max-width: 100%;
   height: auto;
+}
+
+.slide > img,
+.slide p > img:only-child,
+.slide figure > img:only-child {
+  display: block;
+  margin-left: auto;
+  margin-right: auto;
 }
 
 .slide .missing-asset-marker {
@@ -1159,14 +1183,14 @@ body.theme-dark .slide .code-row:nth-child(even) {
 @keyframes marker-stroke-fill-primary {
   0% {
     background-size:
-      0% 0.9em,
-      0% 0.72em;
+      0% 1.12em,
+      0% 0.92em;
   }
 
   100% {
     background-size:
-      100% 0.9em,
-      0% 0.72em;
+      100% 1.12em,
+      0% 0.92em;
   }
 }
 
@@ -1205,14 +1229,14 @@ body.theme-dark .slide .code-row:nth-child(even) {
 @keyframes marker-stroke-fill-secondary {
   0% {
     background-size:
-      100% 0.9em,
-      0% 0.72em;
+      100% 1.12em,
+      0% 0.92em;
   }
 
   100% {
     background-size:
-      100% 0.9em,
-      100% 0.72em;
+      100% 1.12em,
+      100% 0.92em;
   }
 }
 
