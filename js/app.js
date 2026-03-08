@@ -44,8 +44,10 @@
   var currentDeckHashPending = false;
   var deckHashToken = 0;
   var LOCAL_ASSET_DB_NAME = 'clicker.page.local-assets';
-  var LOCAL_ASSET_DB_VERSION = 1;
+  var LOCAL_ASSET_DB_VERSION = 2;
   var LOCAL_ASSET_STORE = 'deck-contexts';
+  var WATCHED_FILE_STORE = 'watched-files';
+  var WATCHED_FILE_KEY = 'active';
   var UI_PREFS_STORAGE_KEY = 'clicker.page.ui-prefs:v1';
   var contentScale = 1;
   var currentTheme = 'light';
@@ -111,7 +113,22 @@
   function updateThemeButtons() {
     if (lightModeBtnEl) lightModeBtnEl.classList.toggle('is-active', currentTheme === 'light');
     if (darkModeBtnEl) darkModeBtnEl.classList.toggle('is-active', currentTheme === 'dark');
-    if (watchSourceBtnEl) watchSourceBtnEl.classList.toggle('is-active', Boolean(watchedFileHandle));
+    if (watchSourceBtnEl) {
+      var watchActive = Boolean(watchedFileHandle);
+      watchSourceBtnEl.classList.toggle('is-active', watchActive);
+      watchSourceBtnEl.setAttribute(
+        'title',
+        watchActive
+          ? 'Watch local source file for changes (active)'
+          : 'Watch local source file for changes'
+      );
+      watchSourceBtnEl.setAttribute(
+        'aria-label',
+        watchActive
+          ? 'Watch local source file for changes, active'
+          : 'Watch local source file for changes'
+      );
+    }
     themePresetButtons.forEach(function (button) {
       button.classList.toggle('is-active', button.dataset.presetId === currentPreset);
     });
@@ -143,6 +160,33 @@
       watchPollTimer = 0;
     }
     updateThemeButtons();
+  }
+
+  async function activateWatchedSourceHandle(handle, preferredSourceQuery) {
+    if (!handle) return false;
+
+    var file = await handle.getFile();
+    var text = await file.text();
+    var preferred = String(preferredSourceQuery || '').trim();
+    var preferredProtocol = getSourceProtocol(preferred);
+    var sourceBase = preferredProtocol === LOCAL_DROP_SOURCE_PREFIX
+      ? stripSourceAnchor(preferred)
+      : createLocalDropSource(handle.name || file.name || 'local file');
+    var preferredAnchor = getSourceAnchor(preferred);
+    var sourceWithAnchor = preferredAnchor ? sourceBase + '#' + encodeURIComponent(preferredAnchor) : sourceBase;
+
+    watchedFileHandle = handle;
+    watchedFileText = text;
+    watchedSourceQuery = sourceBase;
+
+    cacheLocalDropContent(sourceBase, text);
+    updateSourceQuery(sourceWithAnchor);
+    loadMarkdown(text, file.name || handle.name || sourceBase, '', sourceWithAnchor, true);
+
+    if (watchPollTimer) window.clearInterval(watchPollTimer);
+    watchPollTimer = window.setInterval(pollWatchedSourceFile, 1500);
+    updateThemeButtons();
+    return true;
   }
 
   function setPreset(presetId) {
@@ -369,17 +413,21 @@
         if (!db.objectStoreNames.contains(LOCAL_ASSET_STORE)) {
           db.createObjectStore(LOCAL_ASSET_STORE);
         }
+        if (!db.objectStoreNames.contains(WATCHED_FILE_STORE)) {
+          db.createObjectStore(WATCHED_FILE_STORE);
+        }
       };
       request.onsuccess = function () { resolve(request.result); };
       request.onerror = function () { reject(request.error || new Error('IndexedDB open failed')); };
     });
   }
 
-  function withLocalAssetStore(mode, worker) {
+  function withLocalAssetStore(mode, worker, storeName) {
     return openLocalAssetDb().then(function (db) {
       return new Promise(function (resolve, reject) {
-        var tx = db.transaction(LOCAL_ASSET_STORE, mode);
-        var store = tx.objectStore(LOCAL_ASSET_STORE);
+        var targetStore = storeName || LOCAL_ASSET_STORE;
+        var tx = db.transaction(targetStore, mode);
+        var store = tx.objectStore(targetStore);
         var request;
 
         try {
@@ -414,6 +462,41 @@
       debugLog('localAssetHandle:stored', { hash: hash });
     }).catch(function (error) {
       debugLog('localAssetHandle:store-failed', String(error));
+    });
+  }
+
+  function persistWatchedFileHandle(handle) {
+    if (!handle || !window.indexedDB) return Promise.resolve();
+    return withLocalAssetStore('readwrite', function (store) {
+      return store.put(handle, WATCHED_FILE_KEY);
+    }, WATCHED_FILE_STORE).then(function () {
+      debugLog('watchedFileHandle:stored', { name: handle.name || '(unknown)' });
+    }).catch(function (error) {
+      debugLog('watchedFileHandle:store-failed', String(error));
+    });
+  }
+
+  function loadPersistedWatchedFileHandle() {
+    if (!window.indexedDB) return Promise.resolve(null);
+    return withLocalAssetStore('readonly', function (store) {
+      return store.get(WATCHED_FILE_KEY);
+    }, WATCHED_FILE_STORE).then(function (handle) {
+      debugLog('watchedFileHandle:lookup', { hit: Boolean(handle) });
+      return handle || null;
+    }).catch(function (error) {
+      debugLog('watchedFileHandle:read-failed', String(error));
+      return null;
+    });
+  }
+
+  function deletePersistedWatchedFileHandle() {
+    if (!window.indexedDB) return Promise.resolve();
+    return withLocalAssetStore('readwrite', function (store) {
+      return store.delete(WATCHED_FILE_KEY);
+    }, WATCHED_FILE_STORE).then(function () {
+      debugLog('watchedFileHandle:deleted');
+    }).catch(function (error) {
+      debugLog('watchedFileHandle:delete-failed', String(error));
     });
   }
 
@@ -944,6 +1027,7 @@
       }
     } catch (error) {
       debugLog('watchSource:poll-failed', String(error));
+      deletePersistedWatchedFileHandle();
       stopWatchingSourceFile();
     } finally {
       watchPollBusy = false;
@@ -967,23 +1051,36 @@
       var handle = handles && handles[0];
       if (!handle) return;
 
-      var file = await handle.getFile();
-      watchedFileHandle = handle;
-      watchedFileText = await file.text();
-
-      var selectedSource = createLocalDropSource(handle.name || 'local file');
-      cacheLocalDropContent(selectedSource, watchedFileText);
-      watchedSourceQuery = selectedSource;
-      updateSourceQuery(selectedSource);
-      loadMarkdown(watchedFileText, handle.name || selectedSource, '', selectedSource, true);
-
-      if (watchPollTimer) window.clearInterval(watchPollTimer);
-      watchPollTimer = window.setInterval(pollWatchedSourceFile, 1500);
-      updateThemeButtons();
+      await persistWatchedFileHandle(handle);
+      await activateWatchedSourceHandle(handle, currentSourceQuery);
     } catch (error) {
       if (error && error.name === 'AbortError') return;
       debugLog('watchSource:enable-failed', String(error));
       stopWatchingSourceFile();
+    }
+  }
+
+  async function restorePersistedWatchedSourceOnStartup(preferredSourceQuery) {
+    if (!canUseLocalWatch() || !window.indexedDB) return false;
+
+    var handle = await loadPersistedWatchedFileHandle();
+    if (!handle) return false;
+
+    var permission = 'prompt';
+    try {
+      permission = await handle.queryPermission({ mode: 'read' });
+    } catch (_error) {}
+    if (permission !== 'granted') return false;
+
+    try {
+      await activateWatchedSourceHandle(handle, preferredSourceQuery);
+      debugLog('watchSource:restored', { name: handle.name || '(unknown)' });
+      return true;
+    } catch (error) {
+      debugLog('watchSource:restore-failed', String(error));
+      await deletePersistedWatchedFileHandle();
+      stopWatchingSourceFile();
+      return false;
     }
   }
 
@@ -2026,11 +2123,26 @@
 
       codeTable.style.fontSize = '';
 
+      var scale = 1;
       var availableWidth = Math.max(1, pre.clientWidth - 12);
       var requiredWidth = Math.max(1, codeTable.scrollWidth);
-      if (requiredWidth <= availableWidth) return;
+      if (requiredWidth > availableWidth) {
+        scale = Math.min(scale, availableWidth / requiredWidth);
+      }
 
-      codeTable.style.fontSize = String(clamp(availableWidth / requiredWidth, 0.52, 1) * 100) + '%';
+      var heightContainer = pre.closest('.slide-split-pane--content, .slide-split-pane--media, .slide');
+      if (heightContainer) {
+        var preRect = pre.getBoundingClientRect();
+        var containerRect = heightContainer.getBoundingClientRect();
+        var availableHeight = Math.max(1, containerRect.bottom - preRect.top - 8);
+        var requiredHeight = Math.max(1, preRect.height);
+        if (requiredHeight > availableHeight) {
+          scale = Math.min(scale, availableHeight / requiredHeight);
+        }
+      }
+
+      if (scale >= 0.999) return;
+      codeTable.style.fontSize = String(clamp(scale, 0.42, 1) * 100) + '%';
     });
   }
 
@@ -2038,6 +2150,7 @@
     var lines = String(markdown || '').replace(/\r\n/g, '\n').split('\n');
     var chunks = [];
     var current = [];
+    var activeFence = null;
 
     function pushCurrent() {
       var text = current.join('\n').trim();
@@ -2046,6 +2159,27 @@
     }
 
     lines.forEach(function (line, index) {
+      var fenceMatch = /^(\s*)(`{3,}|~{3,})(.*)$/.exec(line);
+      if (fenceMatch) {
+        var fenceRun = fenceMatch[2];
+        var fenceChar = fenceRun.charAt(0);
+        if (!activeFence) {
+          activeFence = {
+            char: fenceChar,
+            size: fenceRun.length
+          };
+        } else if (activeFence.char === fenceChar && fenceRun.length >= activeFence.size) {
+          activeFence = null;
+        }
+        current.push(line);
+        return;
+      }
+
+      if (activeFence) {
+        current.push(line);
+        return;
+      }
+
       var isRule = /^\s*([-*_])\1{2,}\s*$/.test(line);
       var isH1H2 = /^\s*#{1,2}\s+/.test(line);
 
@@ -2572,19 +2706,6 @@
     debugLog('loadDefaultDeck:start', { source: readmeSource });
 
     if (window.location.protocol === 'file:') {
-      var cachedReadme = getCachedFileSourceContent(readmeSource);
-      if (cachedReadme) {
-        var verifiedReadme = isVerifiedFileSource(readmeSource);
-        loadMarkdown(
-          cachedReadme,
-          readmeSource + (verifiedReadme ? ' (cached)' : ' (cached, unresolved path)'),
-          verifiedReadme ? readmeSource : '',
-          readmeSource,
-          verifiedReadme
-        );
-        return;
-      }
-
       showDefaultReadmeBootstrap(readmeSource);
       return;
     }
@@ -2937,56 +3058,60 @@
     });
   }
 
-  var sourceFromQuery = getSourceFromQuery();
-  debugLog('startup', {
-    href: window.location.href,
-    sourceFromQuery: sourceFromQuery || '(none)'
-  });
-  if (sourceFromQuery && looksLikeLoadableSource(sourceFromQuery)) {
-    var queryProtocol = getSourceProtocol(sourceFromQuery);
-    if (queryProtocol === LOCAL_DROP_SOURCE_PREFIX) {
-      var cachedLocalDropContent = getCachedLocalDropContent(sourceFromQuery);
-      if (cachedLocalDropContent) {
-        loadMarkdown(cachedLocalDropContent, sourceFromQuery + ' (cached)', '', sourceFromQuery, true);
-      } else {
-        loadMarkdown(
-          '# Load error\n\nCould not load cached local drop from URL query.\n\nDrop that file again in this browser.',
-          'error',
-          window.location.href,
-          '',
-          false
-        );
+  async function startApp() {
+    var sourceFromQuery = getSourceFromQuery();
+    debugLog('startup', {
+      href: window.location.href,
+      sourceFromQuery: sourceFromQuery || '(none)'
+    });
+
+    if (isLocalAppMode()) {
+      var startupProtocol = getSourceProtocol(sourceFromQuery);
+      if (!sourceFromQuery || startupProtocol === LOCAL_DROP_SOURCE_PREFIX || startupProtocol === 'file:') {
+        var restoredWatch = await restorePersistedWatchedSourceOnStartup(sourceFromQuery);
+        if (restoredWatch) return;
       }
-    } else if (queryProtocol === 'file:') {
-      var cachedFileContent = getCachedFileSourceContent(sourceFromQuery);
-      if (cachedFileContent) {
-        var verifiedFileSource = isVerifiedFileSource(sourceFromQuery);
+    }
+
+    if (sourceFromQuery && looksLikeLoadableSource(sourceFromQuery)) {
+      var queryProtocol = getSourceProtocol(sourceFromQuery);
+      if (queryProtocol === LOCAL_DROP_SOURCE_PREFIX) {
+        var cachedLocalDropContent = getCachedLocalDropContent(sourceFromQuery);
+        if (cachedLocalDropContent) {
+          loadMarkdown(cachedLocalDropContent, sourceFromQuery + ' (cached)', '', sourceFromQuery, true);
+        } else {
+          loadMarkdown(
+            '# Load error\n\nCould not load cached local drop from URL query.\n\nDrop that file again in this browser.',
+            'error',
+            window.location.href,
+            '',
+            false
+          );
+        }
+      } else if (queryProtocol === 'file:') {
         loadMarkdown(
-          cachedFileContent,
-          sourceFromQuery + (verifiedFileSource ? ' (cached)' : ' (cached, unresolved path)'),
-          verifiedFileSource ? sourceFromQuery : '',
-          sourceFromQuery,
-          verifiedFileSource
-        );
-      } else {
-        loadMarkdown(
-          '# Load error\n\nCould not load local file source from URL query.\n\nDrop that file once in this browser session to authorize and cache its content.',
+          '# Load error\n\nBrowsers do not allow automatic startup loading of `file://` sources from the URL.\n\nOpen that file explicitly again with **Watch local source** or by dropping it onto the page.',
           'error',
           window.location.href,
           '',
           false
         );
+      } else {
+        loadFromSource(sourceFromQuery).catch(function (error) {
+          var message = error instanceof Error ? error.message : String(error);
+          loadMarkdown('# Load error\n\nCould not load source from URL query.\n\n`' + message + '`', 'error', window.location.href, '', false);
+        });
       }
     } else {
-      loadFromSource(sourceFromQuery).catch(function (error) {
+      loadDefaultDeck().catch(function (error) {
         var message = error instanceof Error ? error.message : String(error);
-        loadMarkdown('# Load error\n\nCould not load source from URL query.\n\n`' + message + '`', 'error', window.location.href, '', false);
+        loadMarkdown('# Load error\n\nCould not load `README.md` as the default deck.\n\n`' + message + '`', 'error', window.location.href, '', false);
       });
     }
-  } else {
-    loadDefaultDeck().catch(function (error) {
-      var message = error instanceof Error ? error.message : String(error);
-      loadMarkdown('# Load error\n\nCould not load `README.md` as the default deck.\n\n`' + message + '`', 'error', window.location.href, '', false);
-    });
   }
+
+  startApp().catch(function (error) {
+    var message = error instanceof Error ? error.message : String(error);
+    loadMarkdown('# Load error\n\nCould not initialize clicker.page.\n\n`' + message + '`', 'error', window.location.href, '', false);
+  });
 })();

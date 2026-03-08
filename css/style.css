@@ -432,6 +432,32 @@ body {
   border-right-color: rgba(91, 176, 114, 0.24);
 }
 
+#watchSourceBtn {
+  position: relative;
+}
+
+#watchSourceBtn::after {
+  content: "";
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.16);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.12);
+  opacity: 0.45;
+  transition: opacity 140ms ease, background 140ms ease, box-shadow 140ms ease;
+}
+
+#watchSourceBtn.is-active::after {
+  background: #6fd978;
+  box-shadow:
+    0 0 0 1px rgba(111, 217, 120, 0.28),
+    0 0 0.45em rgba(111, 217, 120, 0.5);
+  opacity: 1;
+}
+
 .app {
   position: fixed;
   top: var(--header-height);
@@ -739,12 +765,15 @@ body.theme-dark[data-preset="ivory"] .slide .mermaid-block {
   border: 1px solid var(--border);
   overflow: auto;
   background: var(--mermaid-surface);
+  box-sizing: border-box;
   width: fit-content;
+  min-width: min(100%, 38rem);
   max-width: 100%;
 }
 
 .slide .mermaid-graph {
   display: flex;
+  width: 100%;
   justify-content: center;
 }
 
@@ -1390,6 +1419,23 @@ body.theme-dark .slide .md-strong-marker {
   align-items: center;
   justify-content: center;
   overflow: hidden;
+}
+
+.slide-split-pane--media > .mermaid-block {
+  width: min(100%, 42rem);
+  min-width: 0;
+  height: auto;
+  max-height: 100%;
+  display: block;
+  align-self: center;
+  overflow: auto;
+}
+
+.slide-split-pane--media > .mermaid-block .mermaid-graph {
+  width: 100%;
+  height: auto;
+  min-height: 0;
+  align-items: center;
 }
 
 .slide-split-pane--media img {
