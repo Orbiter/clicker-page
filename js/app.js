@@ -303,6 +303,72 @@
     });
   }
 
+  function isPlainBlockquoteLine(content) {
+    var normalized = String(content || '').trim();
+    if (!normalized) return true;
+    return !/^([>*-]\s|#{1,6}\s|\d+[.)]\s|`{3,}|~{3,}|<|!?\[|[|])/.test(normalized);
+  }
+
+  function preprocessBlockquoteLineBreaks(markdown) {
+    var lines = String(markdown || '').replace(/\r\n/g, '\n').split('\n');
+    var output = [];
+    var quoteBuffer = [];
+
+    function flushPlainQuoteRun(run) {
+      if (run.length <= 1) {
+        run.forEach(function (entry) {
+          output.push(entry.raw);
+        });
+        return;
+      }
+
+      run.forEach(function (entry, index) {
+        var suffix = index < run.length - 1 ? '<br>' : '';
+        output.push(entry.prefix + entry.content.replace(/\s+$/, '') + suffix);
+      });
+    }
+
+    function flushQuoteBuffer() {
+      var plainRun = [];
+
+      function flushPendingPlainRun() {
+        if (!plainRun.length) return;
+        flushPlainQuoteRun(plainRun);
+        plainRun = [];
+      }
+
+      quoteBuffer.forEach(function (entry) {
+        if (isPlainBlockquoteLine(entry.content)) {
+          plainRun.push(entry);
+          return;
+        }
+        flushPendingPlainRun();
+        output.push(entry.raw);
+      });
+
+      flushPendingPlainRun();
+      quoteBuffer = [];
+    }
+
+    lines.forEach(function (line) {
+      var match = /^(\s*(?:>\s*)+)(.*)$/.exec(line);
+      if (!match) {
+        flushQuoteBuffer();
+        output.push(line);
+        return;
+      }
+
+      quoteBuffer.push({
+        raw: line,
+        prefix: match[1],
+        content: match[2]
+      });
+    });
+
+    flushQuoteBuffer();
+    return output.join('\n');
+  }
+
   function applyImageSizingAttributes(img, parsedImageSource) {
     if (!img || !parsedImageSource || !parsedImageSource.style) return;
     var existingStyle = img.getAttribute('style') || '';
@@ -340,7 +406,9 @@
 
   function renderMarkdown(markdown) {
     if (ensureMarked()) {
-      return window.marked.parse(preprocessMarkdownImageSizing(markdown || '')).replace(/<img\b([^>]*?)\ssrc=(["'])(.*?)\2([^>]*)>/gi, '<img$1 data-clicker-src=$2$3$2$4>');
+      return window.marked.parse(
+        preprocessBlockquoteLineBreaks(preprocessMarkdownImageSizing(markdown || ''))
+      ).replace(/<img\b([^>]*?)\ssrc=(["'])(.*?)\2([^>]*)>/gi, '<img$1 data-clicker-src=$2$3$2$4>');
     }
     return '<pre><code>Markdown renderer missing.</code></pre>';
   }
@@ -1429,9 +1497,21 @@
     qrCaption.className = 'slide-qr-caption';
     qrCaption.textContent = 'Scan to open the current page with its source URL.';
 
+    var qrAttribution = document.createElement('p');
+    qrAttribution.className = 'slide-qr-caption slide-qr-caption--attribution';
+    qrAttribution.appendChild(document.createTextNode('Made with '));
+
+    var qrAttributionLink = document.createElement('a');
+    qrAttributionLink.href = 'https://clicker.page';
+    qrAttributionLink.textContent = 'https://clicker.page';
+    qrAttributionLink.target = '_blank';
+    qrAttributionLink.rel = 'noopener noreferrer';
+    qrAttribution.appendChild(qrAttributionLink);
+
     qrCard.appendChild(qrTitle);
     qrCard.appendChild(qrCode);
     qrCard.appendChild(qrCaption);
+    qrCard.appendChild(qrAttribution);
 
     qrPane.appendChild(qrCard);
     renderQrCode(qrCode, window.location.href);
@@ -1985,6 +2065,8 @@
 
   function renderSlideInto(targetEl, slideMarkdown, slideIndex, renderToken, options) {
     var settings = options || {};
+    var revealSlideIndex = typeof settings.revealSlideIndex === 'number' ? settings.revealSlideIndex : slideIndex;
+    var layoutSlideIndex = typeof settings.layoutSlideIndex === 'number' ? settings.layoutSlideIndex : slideIndex;
     var renderedTemplate = document.createElement('template');
     renderedTemplate.innerHTML = renderMarkdown(slideMarkdown);
     resolveRelativeAssets(renderedTemplate.content, settings.baseUrl);
@@ -1995,9 +2077,9 @@
     enhanceTables(targetEl);
     return Promise.resolve(mermaidRender).then(function () {
       applyChainEffects(targetEl);
-      return applySlideLayout(targetEl, renderToken, slideIndex, settings);
+      return applySlideLayout(targetEl, renderToken, layoutSlideIndex, settings);
     }).then(function () {
-      applyBulletReveal(targetEl, slideIndex, settings.enableReveal !== false);
+      applyBulletReveal(targetEl, revealSlideIndex, settings.enableReveal !== false);
       fitCodeBlocks(targetEl);
       if (settings.animateMarkers === false) return;
       animateMarkerHighlights(targetEl, renderToken);
@@ -2244,11 +2326,12 @@
   function resolveInitialSlideIndex(source, slideList) {
     var anchor = slugifySlideAnchor(getSourceAnchor(source));
     if (!anchor) return 0;
+    var totalSlides = slideList.length ? slideList.length + 1 : 0;
 
     var pageMatch = /^(?:page|slide)-?(\d+)$/.exec(anchor) || /^(\d+)$/.exec(anchor);
     if (pageMatch) {
       var oneBasedIndex = Number(pageMatch[1]);
-      if (Number.isFinite(oneBasedIndex) && oneBasedIndex >= 1 && oneBasedIndex <= slideList.length) {
+      if (Number.isFinite(oneBasedIndex) && oneBasedIndex >= 1 && oneBasedIndex <= totalSlides) {
         return oneBasedIndex - 1;
       }
     }
@@ -2313,9 +2396,31 @@
   }
 
   function getCurrentSlideAnchor() {
+    if (slides.length && currentIndex === slides.length) {
+      return 'slide-' + String(currentIndex + 1);
+    }
     var headingAnchor = getSlideHeadingAnchor(slides[currentIndex] || '');
     if (headingAnchor) return headingAnchor;
     return 'slide-' + String(currentIndex + 1);
+  }
+
+  function getDisplaySlideCount() {
+    if (!slides.length) return 0;
+    return slides.length + 1;
+  }
+
+  function isVirtualRepeatSlide(index) {
+    return Boolean(slides.length) && index === slides.length;
+  }
+
+  function getSlideMarkdownForDisplayIndex(index) {
+    if (isVirtualRepeatSlide(index)) return slides[0] || '';
+    return slides[index] || '';
+  }
+
+  function getLayoutSlideIndexForDisplayIndex(index) {
+    if (isVirtualRepeatSlide(index)) return 0;
+    return index;
   }
 
   function syncCurrentSlideSourceQuery() {
@@ -2391,7 +2496,7 @@
   }
 
   function updateView() {
-    var total = slides.length;
+    var total = getDisplaySlideCount();
 
     if (!total) {
       slideWrap.style.display = 'none';
@@ -2404,11 +2509,13 @@
     viewRenderToken = renderToken;
     currentIndex = Math.max(0, Math.min(currentIndex, total - 1));
     syncCurrentSlideSourceQuery();
-    renderSlideInto(slideEl, slides[currentIndex], currentIndex, renderToken, {
+    renderSlideInto(slideEl, getSlideMarkdownForDisplayIndex(currentIndex), currentIndex, renderToken, {
       allowIntroQr: true,
       animateMarkers: true,
       baseUrl: currentBaseUrl,
-      enableReveal: true
+      enableReveal: true,
+      layoutSlideIndex: getLayoutSlideIndexForDisplayIndex(currentIndex),
+      revealSlideIndex: currentIndex
     }).then(function () {
       if (renderToken !== viewRenderToken) return;
     }).catch(function (error) {
@@ -2424,7 +2531,7 @@
 
   function goNext() {
     if (stepBulletReveal(1)) return;
-    if (currentIndex < slides.length - 1) {
+    if (currentIndex < getDisplaySlideCount() - 1) {
       currentIndex += 1;
       updateView();
     }

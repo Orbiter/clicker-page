@@ -931,6 +931,9 @@ body.theme-dark .slide .md-strong-marker {
   margin-left: 0;
   padding-left: 12px;
   color: #333;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 0.82em;
+  line-height: 1.4;
 }
 
 .slide table {
@@ -1500,6 +1503,16 @@ body.theme-dark .slide .md-strong-marker {
   margin: 18px 0 12px;
   font-size: 0.72em;
   color: var(--qr-caption-fg);
+}
+
+.slide-qr-caption--attribution {
+  margin-top: 0;
+}
+
+.slide-qr-caption--attribution a {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 0.14em;
 }
 
 .slide-qr-fallback {

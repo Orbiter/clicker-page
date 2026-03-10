@@ -1,21 +1,28 @@
 # clicker.page
 
-clicker.page turns Markdown into beautiful presentations.
+Turn your existing Markdown into a presentation deck.
 
-- Throw a Markdown file onto this page
-- or a link to a Markdown file
+Drop a `README.md`, a markdown link or file into this page.
+clicker.page turns it into slides you can present immediately, without rebuilding the content in another slide tool.
 
--> your file is instantly hosted an can be shared with your audience
+Ideal for demos, docs, technical talks, and workshops.
 
-Click anywhere to see the manual.
+-> Click anywhere to see the manual.
 
----
+## Quickstart
 
-## Keys and Functions
+- Keep writing documents in Markdown
+- Get slide layouts automatically
+- Share decks from a source URL
+- Present local files during development
 
-- `ArrowRight` / `ArrowDown`: next slide
+-> Navigation: click to next page
+
+### Keys and Functions
+
+- `ArrowRight` / `ArrowDown` / click: next slide
 - `ArrowLeft` / `ArrowUp`: previous slide
-- click or swipe: navigate
+- swipe: navigate
 - `+` / `-`: content font size
 - `☀` / `☾`: light or dark mode
 - theme buttons: switch visual language
@@ -24,9 +31,7 @@ The source URL stays visible in the header and can be copied or opened directly.
 
 -> Want to see the style guide? Click to get to the next page!
 
----
-
-## Markdown Becomes Layout
+## Markdown Becomes Deck Layout
 
 Slides are split by natural authoring markers:
 
@@ -36,8 +41,6 @@ Slides are split by natural authoring markers:
 Everything between is a slide in your slide deck.
 
 Markdown then becomes a styled presentation surface with post-render layout rules.
-
----
 
 ## Images Can Drive The Slide
 
@@ -50,19 +53,13 @@ Portrait images can trigger split-screen layouts.
 
 The other side is your markdown text inside the same 
 
----
-
 ## One-Image-Only slides Become Hero Slides
 
 ![Landscape light example](./examples/landscape-light.svg)
 
----
-
 ## One-Image-Only slides Become Hero Slides
 
 ![Landscape light example](./examples/landscape-dark.svg)
-
----
 
 ## Text Can Be Enhanced
 
@@ -73,8 +70,6 @@ Markdown emphasis and semantic patterns are styled after rendering:
 - `inline code` gets theme-aware chip styling
 
 The pipeline lights up when a sentence contains a chain like intake -> refine -> deliver, and `updateSourceQuery(...)` stays readable inside running prose.
-
----
 
 ## Code Blocks Become Presentation Elements
 
@@ -93,8 +88,6 @@ function renderSlideInto(targetEl, slideMarkdown, slideIndex, renderToken, optio
 
 Code automatically fits in the box, if required the font size is reduced.
 
----
-
 ## Tables Are Styled, Too
 
 | Feature | Result | Q1 | Q2 |
@@ -108,8 +101,6 @@ Code automatically fits in the box, if required the font size is reduced.
 | ![Portrait left](./examples/portrait-left.svg) | ![Portrait right](./examples/portrait-right.svg) |
 | ![Landscape dark](./examples/landscape-dark.svg) | ![Landscape light](./examples/landscape-light.svg) |
 
----
-
 ## Bullet Lists Can Reveal Progressively
 
 - first bullet is visible immediately
@@ -117,8 +108,6 @@ Code automatically fits in the box, if required the font size is reduced.
 - nested content belongs to its parent bullet
 - code blocks can live inside a revealed bullet
 - tables and image sets can live inside a revealed bullet
-
----
 
 ## Local And Remote Markdown Both Work
 
